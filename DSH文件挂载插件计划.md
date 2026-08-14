@@ -40,13 +40,13 @@
 | 阶段 | 内容 |
 |---|---|
 | 1 骨架 | 独立仓库骨架：package.json（`dsh.bundle` + `dsh.client` manifest）/ cordis.patch.yml / src + src/client / 自包含 prepare 构建脚本 / vitest |
-| 2 核心库 | `ranges.ts`、`file-cache.ts`、`types.ts`（含会话事件增广）、挂载存储 / 重放、`render.ts`；移植自 piwpi 并裁剪（fingerprint 二期） |
-| 3 宿主插件 | `index.ts`（Config + FileMountService + post-execute / session-start 监听 + additionalContexts 注入）+ `invariant.ts` |
-| 4 宿主测试 | 单元（ranges / cache / render / store 全覆盖）+ 集成（interception.spec 模式：真 ToolRuntime + fs-local + tool-fs + mock adapter 跑真实 read 循环，含跨 ctx 持久化重放） |
-| 5 客户端 UI | `client/` 半部：`conversation.view` 槽注册「挂载文件」视图 + file-mount 事件折叠 store + ui-primitives 组件 + 中英 locale；client 测试（client-test-runtime 槽位 bench 模式，jsdom） |
-| 6 发布包装 | `dsh.bundle` manifest、`cordis.patch.yml`（host + client 两行）、自包含 `prepare` 构建脚本 |
-| 7 文档 | README（zh/en）+ 接线示例 + 生态目录提交入口 |
-| 8 验收 | 全部测试 + 类型检查 + `dsh plugin add ./包.tgz` 真实安装冒烟：web profile 启动后浏览器可见「挂载文件」标签页、对话上下文行、轨迹 context 记录 |
+| 2 核心库 ✅ | `ranges.ts`、`file-cache.ts`、`paths.ts`、挂载存储 / 重放、`render.ts`；移植自 piwpi 并裁剪（fingerprint 二期；账本载体最终定为 source 结构化字段而非自定义事件） |
+| 3 宿主插件 ✅ | `index.ts`（Config + FileMountService + post-execute / session-start 监听 + additionalContexts 注入）+ `invariant.ts` |
+| 4 宿主测试 ✅ | 单元 + 集成（真实 read 循环 + jsonl 持久化往返 + 会话重放），共 60 用例全绿 |
+| 5 客户端 UI ✅ | `client/` 半部：`conversation.view` 槽注册「挂载文件」视图 + 快照节点折叠 + 中英 locale；轨迹 / 对话上下文行由标准投影免费获得；jsdom 组件测试 + 折叠单测 |
+| 6 发布包装 ✅ | `dsh.bundle` + `dsh.client` manifest、单行双面 cordis.patch.yml、tsdown 双面构建（ModuleLoader banner + CSS 内联 + 纯度门） |
+| 7 文档 ✅ | README.md / README.en.md（安装 / 配置 / 原理 / 限制 / 开发） |
+| 8 验收 ✅ | 60 用例全绿 + tsc 干净 + `dsh plugin add ./包.tgz` 真实安装（隔离 profile）：生效配置含 file-mount 层、服务器启动、`/plugins/dsh-file-mount/client.js` 200（ModuleLoader bundle） |
 
 ## 5. 已定取舍与风险
 
