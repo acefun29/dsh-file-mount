@@ -23,7 +23,9 @@
    - 完全覆盖 → result content 换成短 marker（「已在上下文中，不重复挂载」），零重发；
    - 部分覆盖且 hash 未变 → marker + 仅缺失区间原文（增量挂载）；
    - hash 变化 → marker 声明文件已变化 + 整个窗口作为新锚点（版本感知失效）。
-3. **挂载正文走 additionalContexts 注入**（对原方案的关键修正）：替换后的 result content 只保留 marker，缺失区间的正文以 `source: {kind:'plugin', plugin:'file-mount'}` 的 user/message 注入——这是 DSH 官方支持的 post-tool 通道，且注入消息本身就是前台数据源（轨迹 context 记录 + 对话上下文行都从它投影），一举两得。首次挂载原生透传作锚点（保 UI 卡片），后续增量 / noop / 重挂载才替换。
+3. **挂载正文走 additionalContexts 注入，位置固定**（对原方案的关键修正）：替换后的 result content 只保留 marker，缺失区间的正文以 `source: {kind:'plugin', plugin:'file-mount'}` 的 user/message 注入——这是 DSH 官方支持的 post-tool 通道，且注入消息本身就是前台数据源（轨迹 context 记录 + 对话上下文行都从它投影），一举两得。首次挂载原生透传作锚点（保 UI 卡片），后续增量 / noop / 重挂载才替换。
+   - **挂载位置**：由 DSH 的 post-tool additionalContexts 语义决定——注入块在触发它的那次 read 结果之后、本步骤批次结算时追加，紧邻起因（工具调用/结果与挂载正文成组）。不选请求开头（与触发点失联）、不选会话尾部（DSH 无任意位置注入通道，且跨步骤破坏因果）。
+   - **位置一经写入即固定**：后续新挂载各挂各的触发点，旧块永不改写/挪动，历史前缀稳定 → provider KV 缓存友好。与 piwpi 的「每次请求重渲染尾部追加」不同：DSH 是「日志即上下文」，写进去即固定，效果等价且机制更简单。
 4. **确定性渲染**。marker 与信封由状态唯一决定，同状态逐字节相同，保证 prompt 前缀缓存稳定。
 5. **持久化与恢复**。会话事件 `file-mount/mounted` / `file-mount/invalidated` 以 `ignorable: true` 写入会话日志（独立插件的事件类型不进入 DSH 生成的 KNOWN_SESSION_EVENT_TYPES，ignorable 标记让 DSH 自身重建安全跳过、本插件自读自解释——已核实写路径 envelope 校验开放、history RPC 不过滤事件类型）；`agent/session-start`(resume) 触发重放，post-execute 首次访问 lazy await 防竞态。Plan B：若实测跨进程读回路径拒绝，退回 storage-domain（JSON）+ Remote 端点。文件缓存照搬 piwpi stat 校验式设计（mtime+size 快路径、TTL 安全阀、挂载中 pin）。
 6. **前台展示（DSH 风格三处落地）**：
