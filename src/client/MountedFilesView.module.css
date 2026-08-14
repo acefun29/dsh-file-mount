@@ -1,0 +1,65 @@
+/* Mounted-files view list styling, matching the DSH tab panel look. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.empty {
+  color: var(--text-secondary, #8a8f98);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 4px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.02));
+}
+
+.path {
+  font-family: var(--font-mono, ui-monospace, 'Cascadia Mono', Consolas, monospace);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--text-secondary, #8a8f98);
+}
+
+.badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 16px;
+  background: var(--badge-bg, rgba(96, 165, 250, 0.18));
+  color: var(--badge-fg, #93c5fd);
+  white-space: nowrap;
+}
+
+.ranges {
+  font-family: var(--font-mono, ui-monospace, 'Cascadia Mono', Consolas, monospace);
+  white-space: nowrap;
+}
+
+.hash,
+.lines {
+  white-space: nowrap;
+}
