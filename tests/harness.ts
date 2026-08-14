@@ -14,13 +14,15 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import FsLocal from '@deepseek-ai/dsh-fs-local'
 import * as toolFs from '@deepseek-ai/dsh-tool-fs'
-import { apply as fileMountApply } from '../src/index.ts'
+import { apply as fileMountApply, type Config } from '../src/index.ts'
 
 export interface HarnessOptions {
   /** Filesystem base directory for the read tool. */
   cwd: string
   /** Plugin kill switch (defaults to enabled). */
   enabled?: boolean
+  /** Extra plugin config (e.g. minSavedTokens). */
+  config?: Config
 }
 
 /** Scripted adapter: each model call consumes the next script entry. */
@@ -86,7 +88,7 @@ export async function harness(adapter: MockAdapter, options: HarnessOptions): Pr
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(FsLocal, { cwd: options.cwd })
   await ctx.plugin(toolFs, {})
-  await ctx.plugin(fileMountApply, { enabled: options.enabled ?? true })
+  await ctx.plugin(fileMountApply, { enabled: options.enabled ?? true, ...options.config })
   ctx.llm.registerAdapter(['mock'], adapter)
   return ctx
 }

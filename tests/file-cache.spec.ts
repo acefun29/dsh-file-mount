@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { FileContentCache } from '../src/file-cache.ts'
-import { hashBuffer } from '../src/hash.ts'
+import { fingerprintLines, hashBuffer } from '../src/hash.ts'
 
 describe('hashBuffer', () => {
   it('matches the known sha256 vector', () => {
@@ -109,16 +109,131 @@ describe('FileContentCache', () => {
   it('keeps pinned entries across eviction', async () => {
     const cache = new FileContentCache({ capacity: 2 })
     const entryA = await cache.get(a)
-    cache.pin(a)
+    cache.pin(a, 's1')
     await cache.get(b)
     await cache.get(c)
     expect(await cache.get(a)).toBe(entryA)
-    cache.unpin(a)
+    cache.unpin(a, 's1')
+  })
+
+  it('counts pins per session key (one release keeps the other)', async () => {
+    const cache = new FileContentCache({ capacity: 2 })
+    const entryA = await cache.get(a)
+    cache.pin(a, 's1')
+    cache.pin(a, 's2')
+    await cache.get(b)
+    await cache.get(c)
+    expect(await cache.get(a)).toBe(entryA)
+    cache.unpin(a, 's1')
+    await cache.get(b)
+    expect(await cache.get(a)).toBe(entryA)
+    cache.unpin(a, 's2')
+  })
+
+  it('unpinAll releases only that session\'s pins', async () => {
+    const cache = new FileContentCache({ capacity: 2 })
+    const entryA = await cache.get(a)
+    cache.pin(a, 's1')
+    cache.pin(a, 's2')
+    cache.unpinAll('s1')
+    await cache.get(b)
+    await cache.get(c)
+    expect(await cache.get(a)).toBe(entryA)
+    cache.unpinAll('s2')
+    await cache.get(b)
+    await cache.get(c)
+    expect(await cache.get(a)).not.toBe(entryA)
   })
 
   it('computes the same identity as a direct file read', async () => {
     const cache = new FileContentCache()
     const entry = await cache.get(b)
     expect(entry!.hash).toBe(hashBuffer(await readFile(b)))
+  })
+
+  it('returns the current entry with changed=false on a fresh miss', async () => {
+    const cache = new FileContentCache()
+    const lookup = await cache.lookup(a)
+    expect(lookup).not.toBeNull()
+    expect(lookup!.changed).toBe(false)
+    expect(lookup!.previous).toBeUndefined()
+  })
+
+  it('returns previous and changed when content changes', async () => {
+    const cache = new FileContentCache()
+    const first = await cache.get(a)
+    await writeFile(a, 'alpha\nbeta\ngamma\n', 'utf8')
+    const lookup = await cache.lookup(a)
+    expect(lookup!.changed).toBe(true)
+    expect(lookup!.previous!.hash).toBe(first!.hash)
+    expect(lookup!.current.hash).not.toBe(first!.hash)
+  })
+
+  it('merges concurrent reads into one readFile call', async () => {
+    let reads = 0
+    const cache = new FileContentCache({
+      readFile: async (path) => {
+        reads++
+        return await readFile(path)
+      },
+    })
+    const [r1, r2] = await Promise.all([cache.lookup(a), cache.lookup(a)])
+    expect(reads).toBe(1)
+    expect(r1!.current).toBe(r2!.current)
+  })
+
+  it('stores per-line fingerprints for small files', async () => {
+    const cache = new FileContentCache()
+    const entry = await cache.get(b)
+    expect(entry!.lineHashes).toHaveLength(3)
+    expect(entry!.lineCount).toBe(3)
+  })
+
+  it('skips fingerprints for files over the size cap', async () => {
+    const cache = new FileContentCache({ maxFingerprintBytes: 10 })
+    const entry = await cache.get(a)
+    expect(entry!.lineHashes).toHaveLength(0)
+    expect(entry!.lineCount).toBe(0)
+  })
+
+  it('returns null for files over the management cap (plan item 7)', async () => {
+    const cache = new FileContentCache({ maxManagedBytes: 5 })
+    expect(await cache.get(a)).toBeNull()
+  })
+
+  it('invalidate forgets the cached entry (write/edit paths)', async () => {
+    const cache = new FileContentCache()
+    const first = await cache.get(a)
+    cache.invalidate(a)
+    const second = await cache.get(a)
+    expect(second).not.toBe(first)
+  })
+})
+
+describe('fingerprintLines', () => {
+  it('splits on newlines and returns one fingerprint per line', () => {
+    expect(fingerprintLines(Buffer.from('a\nb\nc\n', 'utf8'))).toHaveLength(3)
+  })
+
+  it('does not add a trailing empty line for a trailing newline', () => {
+    expect(fingerprintLines(Buffer.from('a\nb\n', 'utf8'))).toHaveLength(2)
+    expect(fingerprintLines(Buffer.from('a\nb', 'utf8'))).toHaveLength(2)
+  })
+
+  it('treats an empty file as zero lines', () => {
+    expect(fingerprintLines(Buffer.from('', 'utf8'))).toHaveLength(0)
+  })
+
+  it('counts an interior empty line', () => {
+    expect(fingerprintLines(Buffer.from('a\n\nb\n', 'utf8'))).toHaveLength(3)
+  })
+
+  it('strips CRLF so LF and CRLF versions share fingerprints', () => {
+    expect(fingerprintLines(Buffer.from('a\r\nb\r\n', 'utf8'))).toEqual(fingerprintLines(Buffer.from('a\nb\n', 'utf8')))
+  })
+
+  it('equals for equal content and differs for different content', () => {
+    expect(fingerprintLines(Buffer.from('x\ny', 'utf8'))).toEqual(fingerprintLines(Buffer.from('x\ny', 'utf8')))
+    expect(fingerprintLines(Buffer.from('x\ny', 'utf8'))).not.toEqual(fingerprintLines(Buffer.from('x\nz', 'utf8')))
   })
 })

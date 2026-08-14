@@ -17,10 +17,23 @@ export function formatRange(start: number, end: number): string {
   return start === end ? `L${start}` : `L${start}-${end}`
 }
 
-/** Shared marker head: identity + short hash + mounted ranges (normalized). */
+/**
+ * Shared marker head: identity + short hash + a compact mounted summary.
+ * A few ranges are listed outright; many ranges collapse to a line/range
+ * count so the note never grows with the number of mounted ranges (item 12).
+ */
 export function markerHead(path: string, hash: string, mounted: Segment[]): string {
-  const ranges = normalize(mounted).map((s) => formatRange(s.start, s.end)).join(', ')
-  return `[file-mount: ${path} hash:${hash.slice(0, 8)} mounted:${ranges}]`
+  const normalized = normalize(mounted)
+  let summary: string
+  if (normalized.length === 0) {
+    summary = 'none'
+  } else if (normalized.length <= 3) {
+    summary = normalized.map((s) => formatRange(s.start, s.end)).join(', ')
+  } else {
+    const lineCount = normalized.reduce((n, s) => n + (s.end - s.start + 1), 0)
+    summary = `${lineCount} lines in ${normalized.length} ranges`
+  }
+  return `[file-mount: ${path} hash:${hash.slice(0, 8)} mounted:${summary}]`
 }
 
 /** Full-coverage read: the window adds nothing new. */
@@ -28,9 +41,19 @@ export function renderDedupMarker(path: string, hash: string, mounted: Segment[]
   return `${markerHead(path, hash, mounted)} - already mounted, not re-added`
 }
 
-/** Hash change: the previous mount is stale and the window remounts fresh. */
-export function renderRemountMarker(path: string, hash: string, mounted: Segment[]): string {
-  return `${markerHead(path, hash, mounted)} - file changed since last mount, remounting`
+/** Line counts a diff produced (added/removed/unchanged), for the remount note. */
+export interface RemountStats {
+  added: number
+  removed: number
+  unchanged: number
+}
+
+/** Hash change: the previous mount is stale and the window remounts. With diff
+ * stats, report the change shape; otherwise the generic remount note. */
+export function renderRemountMarker(path: string, hash: string, mounted: Segment[], stats?: RemountStats): string {
+  const head = markerHead(path, hash, mounted)
+  if (stats === undefined) return `${head} - file changed since last mount, remounting`
+  return `${head} - file changed: +${stats.added}/-${stats.removed} lines (~${stats.unchanged} unchanged) since last mount`
 }
 
 /** Options for {@link renderMountBlock}. */

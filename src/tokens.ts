@@ -1,12 +1,24 @@
 /**
- * Coarse token estimates for saved-context accounting. The ÷4 rule is the
- * documented v1 approximation (see the plan doc, section 7); a precise
- * tokenizer is deferred.
+ * Coarse token estimates for saved-context accounting. CJK characters count
+ * as one token each (a Han character is roughly one token); everything else
+ * uses the ÷4 rule. A precise tokenizer is deferred.
  */
 
-/** Estimate the token count of a model-facing text (chars ÷ 4, min 1). */
+/** One code point that counts as a full token (CJK + fullwidth + Hangul + kana). */
+const CJK_CHAR = /[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]/
+
+/**
+ * Estimate the token count of a model-facing text: CJK characters count as
+ * one token each, the remaining characters as chars ÷ 4 (min 1 overall).
+ */
 export function estimateTokens(text: string): number {
-  return Math.max(1, Math.ceil(text.length / 4))
+  let cjk = 0
+  let other = 0
+  for (const char of text) {
+    if (CJK_CHAR.test(char)) cjk++
+    else other++
+  }
+  return Math.max(1, cjk + Math.ceil(other / 4))
 }
 
 /**

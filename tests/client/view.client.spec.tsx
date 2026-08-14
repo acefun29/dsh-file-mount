@@ -53,14 +53,19 @@ describe('MountedFilesView', () => {
       },
     ]
     const { container } = render(<MountedFilesView {...viewProps(nodes)} />)
-    expect(container.querySelector('[data-mount-summary]')?.textContent).toBe(zh['summary.savedTotal'].replace('{n}', '0'))
+    const summary = container.querySelector('[data-mount-summary]')?.textContent ?? ''
+    expect(summary).toContain(zh['summary.netTotal'].replace('{n}', '0'))
+    expect(container.querySelector('[data-mount-cny]')?.textContent).toBe(zh['summary.cny'].replace('{n}', '0.00'))
+    expect(container.querySelector('[data-mount-search]')).not.toBeNull()
+    expect(container.querySelector('[data-mount-sort]')).not.toBeNull()
     const rows = container.querySelectorAll('[data-mount-row]')
     expect(rows).toHaveLength(1)
     expect(rows[0]!.querySelector('[data-mount-badge]')?.textContent).toBe(zh['kind.new'])
     expect(rows[0]!.querySelector('[data-mount-ranges]')?.textContent).toBe('L1-50')
     expect(rows[0]!.querySelector('[data-mount-hash]')?.textContent).toContain('abcdef01')
-    expect(rows[0]!.querySelector('[data-mount-lines]')?.textContent).toBe('100 ' + zh['list.lines'])
-    expect(rows[0]!.querySelector('[data-mount-saved]')?.textContent).toBe(zh['row.saved'].replace('{n}', '0'))
+    expect(rows[0]!.querySelector('[data-mount-lines]')?.textContent).toBe('50/100 ' + zh['list.lines'])
+    expect(rows[0]!.querySelector('[data-mount-progress]')?.getAttribute('aria-valuenow')).toBe('50')
+    expect(rows[0]!.querySelector('[data-mount-net]')?.textContent).toBe(zh['row.net'].replace('{n}', '0'))
     expect(rows[0]!.getAttribute('data-mount-kind')).toBe('new')
   })
 

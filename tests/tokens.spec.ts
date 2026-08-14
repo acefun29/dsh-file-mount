@@ -10,6 +10,20 @@ describe('estimateTokens', () => {
   it('never estimates zero', () => {
     expect(estimateTokens('')).toBe(1)
   })
+
+  it('counts each CJK character as one token', () => {
+    expect(estimateTokens('你好')).toBe(2)
+    expect(estimateTokens('你好世界')).toBe(4)
+  })
+
+  it('mixes CJK and ASCII by their own rules', () => {
+    expect(estimateTokens('你好abcd')).toBe(3)
+    expect(estimateTokens('你好abcde')).toBe(4)
+  })
+
+  it('treats fullwidth punctuation as CJK', () => {
+    expect(estimateTokens('「你好」')).toBe(4)
+  })
 })
 
 describe('estimateRangeTokens', () => {

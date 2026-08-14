@@ -4,7 +4,7 @@
  * hash-change remount, lazy replay from the live session log, and a jsonl
  * persistence round trip (the standard user/message carrier must survive).
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -50,7 +50,7 @@ describe('file-mount integration', () => {
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'dsh-file-mount-it-'))
     file = join(dir, 'subject.txt')
-    await writeFile(file, ['1', '2', '3', '4', '5', '6'].join('\n') + '\n', 'utf8')
+    await writeFile(file, ['1', '2', '3', '4', '5', '6'].map((n) => n + 'x'.repeat(39)).join('\n') + '\n', 'utf8')
   })
 
   afterAll(async () => {
@@ -78,12 +78,12 @@ describe('file-mount integration', () => {
     expect(sources[0]!['form']).toBe('notice')
     expect(sources[0]!['summary']).toBe('mounted L1-4')
     expect(sources[1]!['mountKind']).toBe('dedup')
-    expect(sources[1]!['savedTokens']).toBe(4)
+    expect(sources[1]!['savedTokens']).toBe(40)
     expect(sources[1]!['added']).toEqual([])
     expect(sources[2]!['added']).toEqual([{ start: 5, end: 6 }])
     expect(sources[2]!['mounted']).toEqual([{ start: 1, end: 6 }])
-    expect(sources[2]!['savedTokens']).toBe(2)
-    expect(sources[2]!['summary']).toBe('+L5-6 - saved ≈ 2 tokens')
+    expect(sources[2]!['savedTokens']).toBe(20)
+    expect(sources[2]!['summary']).toBe('+L5-6 - saved ≈ 20 tokens')
 
     // c2 (full coverage): short dedup marker, nothing re-added.
     expect(resultText(agent, 'c2')).toContain('mounted:L1-4] - already mounted, not re-added')
@@ -95,7 +95,7 @@ describe('file-mount integration', () => {
     expect(dedupNote !== undefined && dedupNote.type === 'user/message'
       && dedupNote.data.content[0] !== undefined && dedupNote.data.content[0].type === 'text'
       ? dedupNote.data.content[0].text
-      : '').toContain('saved ≈ 4 tokens')
+      : '').toContain('saved ≈ 40 tokens')
 
     // c3 (partial): short content marker; the missing tail rides the injected message.
     expect(resultText(agent, 'c3')).toContain('+L5-6')
@@ -116,9 +116,26 @@ describe('file-mount integration', () => {
     const ledger = ctx.fileMount.ledger(agent)
     expect(ledger.map((f) => f.absPath)).toEqual([normalizeAbsPath(file)])
     expect(ledger[0]!.segments).toEqual([{ start: 1, end: 6 }])
-    expect(ledger[0]!.savedTokens).toBe(6)
+    expect(ledger[0]!.savedTokens).toBe(60)
 
     
+  })
+
+  it('passes tiny reads through untouched when below the savings threshold', async () => {
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 4 }),
+      toolCallResponse('c2', 'read', { file_path: file, offset: 1, limit: 1 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 12 } })
+    const agent = ctx.agentLoop.create(SessionId('it-threshold'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    // c1 anchors L1-4 (new mount, no threshold); c2 reads one 10-token line
+    // (below minSavedTokens 12) and must pass through natively.
+    expect(resultText(agent, 'c2')).toContain('<content>')
+    expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new'])
   })
 
   it('remounts as a fresh anchor when the file changes on disk', async () => {
@@ -145,12 +162,58 @@ describe('file-mount integration', () => {
     
   })
 
+  it('re-sends only the changed line after a mid-file edit (incremental remount)', async () => {
+    const subject = join(dir, 'incremental.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3', '4', '5', '6'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 6 }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 6 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = ctx.agentLoop.create(SessionId('it-incremental'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    // Change only line 3 on disk; the other five lines stay byte-identical.
+    const changedLine3 = 'CHANGED' + 'y'.repeat(33)
+    await writeFile(subject, [line('1'), line('2'), changedLine3, line('4'), line('5'), line('6')].join('\n') + '\n', 'utf8')
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
+    expect(sources[1]!['hash']).not.toBe(sources[0]!['hash'])
+    // Only the changed line is re-sent; the five unchanged lines stay mounted.
+    expect(sources[1]!['added']).toEqual([{ start: 3, end: 3 }])
+    expect(sources[1]!['mounted']).toEqual([{ start: 1, end: 6 }])
+    expect(sources[1]!['savedTokens']).toBe(50)
+    expect(resultText(agent, 'c2')).toContain('file changed: +1/-1 lines (~5 unchanged) since last mount')
+
+    const remount = agent.session.events.find((e) => e.type === 'user/message'
+      && typeof e.data.source === 'object' && e.data.source !== null
+      && e.data.source['mountKind'] === 'remount')
+    const remountText = remount !== undefined && remount.type === 'user/message'
+      && remount.data.content[0] !== undefined && remount.data.content[0].type === 'text'
+      ? remount.data.content[0].text
+      : ''
+    expect(remountText).toContain('--- L3 ---')
+    expect(remountText).toContain('CHANGED')
+
+    const ledger = ctx.fileMount.ledger(agent)
+    expect(ledger[0]!.segments).toEqual([{ start: 1, end: 6 }])
+    expect(ledger[0]!.savedTokens).toBe(50)
+  })
+
   it('replays the ledger from the live log (resume path) before the first read', async () => {
     const adapter = new MockAdapter([
       toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 2 }),
       textResponse('done'),
     ])
-    const ctx = await harness(adapter, { cwd: dir })
+    const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 0 } })
     const agent = ctx.agentLoop.create(SessionId('it-replay'), { provider: 'mock', model: 'mock' })
 
     // Seed the resumed log with a mount message for L1-2 (standard event type).
@@ -273,5 +336,147 @@ describe('file-mount integration', () => {
     replayed.replay(mountEvents.map((event) => ({ type: event.type, source: event.data.source })))
     expect(replayed.mountedSegments(normalizeAbsPath(file))).toEqual([{ start: 1, end: 2 }])
 
+  })
+
+  it('re-sends only the new tail when a file grows (append-only, item 10)', async () => {
+    const subject = join(dir, 'append.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3', '4'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 6 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = ctx.agentLoop.create(SessionId('it-append'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    await writeFile(subject, ['1', '2', '3', '4', '5', '6'].map(line).join('\n') + '\n', 'utf8')
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
+    expect(sources[1]!['added']).toEqual([{ start: 5, end: 6 }])
+    expect(sources[1]!['mounted']).toEqual([{ start: 1, end: 6 }])
+    expect(resultText(agent, 'c2')).toContain('file changed: +2/-0 lines (~4 unchanged) since last mount')
+  })
+
+  it('coalesces repeated dedup notes and merges their savings into the next message (item 3)', async () => {
+    const subject = join(dir, 'dedup-merge.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3', '4', '5', '6'].map(line).join('\n') + '\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      toolCallResponse('c3', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      toolCallResponse('c4', 'read', { file_path: subject, offset: 5, limit: 2 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = ctx.agentLoop.create(SessionId('it-dedup-merge'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    // Only ONE dedup note; the second dedup is silent, the increment folds it.
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'dedup', 'increment'])
+    expect(sources.filter((s) => s['mountKind'] === 'dedup')).toHaveLength(1)
+    expect(sources[2]!['savedTokens']).toBe(40)
+    // The silent dedup still replaced its result with the marker.
+    expect(resultText(agent, 'c3')).toContain('already mounted, not re-added')
+    // Ledger total: 40 (first dedup) + 40 (silent dedup, folded) + 0 (increment).
+    expect(ctx.fileMount.ledger(agent)[0]!.savedTokens).toBe(80)
+  })
+
+  it('mounts a freshly written file as already known (item 13)', async () => {
+    const subject = join(dir, 'written.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'write', { file_path: subject, content: [line('a'), line('b'), line('c')].join('\n') + '\n' }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = ctx.agentLoop.create(SessionId('it-write-known'), { provider: 'mock', model: 'mock' })
+    send(agent, 'write it')
+    await waitForIdle(ctx, agent)
+
+    // The write mounts the whole file as known via a head-only 'new' message.
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new'])
+    expect(sources[0]!['mounted']).toEqual([{ start: 1, end: 3 }])
+    // The subsequent read of the written file dedupes instead of re-sending.
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+    expect(resultText(agent, 'c2')).toContain('already mounted, not re-added')
+  })
+
+
+  it('the forget tool forces the next read to re-send (item 25)', async () => {
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 4 }),
+      toolCallResponse('c2', 'file_mount_forget', { file_path: file }),
+      textResponse('first turn done'),
+      toolCallResponse('c3', 'read', { file_path: file, offset: 1, limit: 4 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = ctx.agentLoop.create(SessionId('it-forget'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read then forget')
+    await waitForIdle(ctx, agent)
+
+    // After forgetting, the same window re-anchors natively instead of deduping.
+    send(agent, 'read again')
+    await waitForIdle(ctx, agent)
+    expect(resultText(agent, 'c3')).toContain('<content>')
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'new'])
+  })
+
+  it('passes excluded paths through untouched (item 7)', async () => {
+    const excluded = join(dir, 'vendor', 'lib.ts')
+    await mkdir(join(dir, 'vendor'), { recursive: true })
+    await writeFile(excluded, 'a\nb\nc\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: excluded, offset: 1, limit: 3 }),
+      toolCallResponse('c2', 'read', { file_path: excluded, offset: 1, limit: 3 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { excludeGlobs: ['**/vendor/**'] } })
+    const agent = ctx.agentLoop.create(SessionId('it-exclude'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    // Both reads stay native and the plugin never mounts anything.
+    expect(resultText(agent, 'c1')).toContain('<content>')
+    expect(resultText(agent, 'c2')).toContain('<content>')
+    expect(mountMessages(agent)).toEqual([])
+  })
+
+  it('accumulates cross-session totals into the stats file (item 24)', async () => {
+    const statsPath = join(dir, 'stats.json')
+    const subject = join(dir, 'stats.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3', '4'].map(line).join('\n') + '\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { statsFile: statsPath } })
+    const agent = ctx.agentLoop.create(SessionId('it-stats'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    await ctx.fiber.dispose()
+    // persistStats is fire-and-forget; give it a tick to land.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const raw = await readFile(statsPath, 'utf8')
+    const stats = JSON.parse(raw) as { sessions: number; savedTokens: number }
+    expect(stats.sessions).toBe(1)
+    expect(stats.savedTokens).toBe(40)
   })
 })

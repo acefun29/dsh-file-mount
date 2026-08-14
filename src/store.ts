@@ -2,27 +2,17 @@
  * Per-session mount ledger. One writer: the plugin's post-execute handler,
  * serialized by the tool pipeline. Replay folds the plugin-injected context
  * messages' structured sources so a resumed session (and the browser client)
- * reconstruct the same state from standard, persistence-safe events.
+ * reconstruct the same state from standard, persistence-safe events. The
+ * validation and fold rules live in mount-source.ts, shared with the browser
+ * half (plan item 20).
  */
-import { normalize } from './ranges.ts'
 import type { MountedFile, Segment } from './types.ts'
+import { applyMountState, parseMountSource } from './mount-source.ts'
 
 /** One user/message record as the ledger consumer reads it. */
 export interface LedgerRecord {
   type: string
   source: unknown
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function isValidSegment(value: unknown): value is Segment {
-  if (!isRecord(value)) return false
-  const { start, end } = value
-  return typeof start === 'number' && typeof end === 'number'
-    && Number.isSafeInteger(start) && Number.isSafeInteger(end)
-    && start >= 1 && end >= start
 }
 
 export class MountStore {
@@ -41,22 +31,21 @@ export class MountStore {
   }
 
   /**
-   * Union a mounted window into the ledger. A hash mismatch proves the
-   * on-disk content changed, so the previous entry is replaced wholesale
-   * (the new window becomes the fresh anchor). Saved-token totals are
-   * session-cumulative: they survive a hash-change replacement.
+   * Union a mounted window into the ledger via the shared fold rule. A hash
+   * mismatch proves the on-disk content changed, so the previous entry is
+   * replaced wholesale; saved/spent totals are session-cumulative and survive
+   * a hash-change replacement.
    */
   mount(file: MountedFile): void {
     const existing = this.files.get(file.absPath)
-    if (existing !== undefined && existing.hash === file.hash) {
-      existing.segments = normalize([...existing.segments, ...file.segments])
-      existing.savedTokens += file.savedTokens
-    } else {
-      this.files.set(file.absPath, {
-        ...file,
-        savedTokens: (existing?.savedTokens ?? 0) + file.savedTokens,
-      })
-    }
+    const next = applyMountState(existing, {
+      hash: file.hash,
+      totalLines: file.totalLines,
+      segments: file.segments,
+      savedTokens: file.savedTokens ?? 0,
+      spentTokens: file.spentTokens ?? 0,
+    })
+    this.files.set(file.absPath, { absPath: file.absPath, ...next })
   }
 
   /** Drop one entry (hash change / explicit invalidation). */
@@ -71,20 +60,11 @@ export class MountStore {
    */
   replay(records: readonly LedgerRecord[]): void {
     for (const record of records) {
-      if (record.type !== 'user/message' || !isRecord(record.source)) continue
-      const source = record.source
-      if (source['kind'] !== 'plugin' || source['plugin'] !== 'file-mount') continue
-      const { path, hash, totalLines, mounted, mountKind, savedTokens } = source
-      if (typeof path !== 'string' || path.length === 0
-        || typeof hash !== 'string' || hash.length === 0
-        || typeof totalLines !== 'number' || !Number.isSafeInteger(totalLines) || totalLines < 1
-        || (mountKind !== 'new' && mountKind !== 'increment' && mountKind !== 'remount' && mountKind !== 'dedup')
-        || !Array.isArray(mounted) || mounted.length === 0
-        || !mounted.every(isValidSegment)) continue
-      const saved = typeof savedTokens === 'number' && Number.isSafeInteger(savedTokens) && savedTokens >= 0
-        ? savedTokens
-        : 0
-      this.mount({ absPath: path, hash, totalLines, segments: mounted, savedTokens: saved })
+      if (record.type !== 'user/message') continue
+      const parsed = parseMountSource(record.source)
+      if (parsed === undefined) continue
+      const existing = this.files.get(parsed.path)
+      this.files.set(parsed.path, { absPath: parsed.path, ...applyMountState(existing, parsed.delta) })
     }
   }
 

@@ -1,7 +1,13 @@
 node_modules/
 lib/
+.pnpm-store/
 *.tsbuildinfo
 .DS_Store
 *.log
 .env
 *.tgz
+
+# 根目录非 readme 文档（计划 / 方案草稿）不提交
+/*.md
+!/README.md
+!/README.en.md

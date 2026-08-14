@@ -29,6 +29,8 @@ export interface MountedFile {
   segments: Segment[]
   /** Cumulative tokens this ledger kept out of the context for this path. */
   savedTokens: number
+  /** Cumulative tokens the plugin's own injected notes cost for this path. */
+  spentTokens: number
 }
 
 /**
@@ -56,4 +58,6 @@ export interface MountSource {
   mountKind: MountKind
   /** Tokens this decision kept out of the context (0 for new/remount). */
   savedTokens: number
+  /** Tokens this message's own note cost (the plugin overhead it injects). */
+  spentTokens: number
 }

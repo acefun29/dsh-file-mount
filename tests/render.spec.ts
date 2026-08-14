@@ -35,6 +35,17 @@ describe('markerHead', () => {
     const segments = [{ start: 1, end: 100 }, { start: 150, end: 200 }]
     expect(markerHead('x.ts', 'h', segments)).toBe(markerHead('x.ts', 'h', segments))
   })
+
+  it('collapses many ranges into a line/range count', () => {
+    const mounted = [
+      { start: 1, end: 10 },
+      { start: 21, end: 30 },
+      { start: 41, end: 50 },
+      { start: 61, end: 70 },
+    ]
+    expect(markerHead('src/a.ts', 'abc12345', mounted))
+      .toBe('[file-mount: src/a.ts hash:abc12345 mounted:40 lines in 4 ranges]')
+  })
 })
 
 describe('renderDedupMarker', () => {
@@ -48,6 +59,11 @@ describe('renderRemountMarker', () => {
   it('states the file changed', () => {
     expect(renderRemountMarker('src/a.ts', 'abc12345', [{ start: 1, end: 10 }]))
       .toBe('[file-mount: src/a.ts hash:abc12345 mounted:L1-10] - file changed since last mount, remounting')
+  })
+
+  it('reports the diff shape when stats are supplied', () => {
+    expect(renderRemountMarker('src/a.ts', 'abc12345', [{ start: 1, end: 10 }], { added: 1, removed: 1, unchanged: 9 }))
+      .toBe('[file-mount: src/a.ts hash:abc12345 mounted:L1-10] - file changed: +1/-1 lines (~9 unchanged) since last mount')
   })
 })
 
