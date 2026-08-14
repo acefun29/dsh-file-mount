@@ -1,0 +1,10 @@
+# dsh-file-mount bundle layer: one dual-face row.
+# The node half is the host plugin (read interception, mount ledger, session
+# events); the client half is the browser UI (mounted-files view tab, context
+# rows, trajectory records). DSH's client module scanner reads the package's
+# `dsh.client` manifest from this same row.
+- insert:
+    - id: file-mount
+      name: dsh-file-mount
+      config:
+        enabled: true
