@@ -12,8 +12,8 @@
 
 ## 2. 命名
 
-- 包名 **`@deepseek-ai/dsh-file-mount`**，插件 `name: 'file-mount'`，服务键 `ctx.fileMount`。
-- 开发载体：工作区根目录独立仓库 `dsh-file-mount/`（本仓库），自带 `dsh.bundle.patch` + `cordis.patch.yml`，外部 `dsh plugin add` 直接安装；开发期以 `--patch` overlay 或 pnpm link 挂入 DSH checkout 测试，不修改 checkout（不污染根目录与其他目录）。
+- 包名 **`dsh-file-mount`**（npm 第三方可发布；`@deepseek-ai/*` scope 归官方所有，第三方发布不了——生态先例 context-vista / dsh-at-file 均为普通名），插件 `name: 'file-mount'`，服务键 `ctx.fileMount`。若日后合并进官方 monorepo 再改 `@deepseek-ai/dsh-file-mount`。
+- 开发载体：工作区根目录独立仓库 `dsh-file-mount/`（本仓库），自带 `dsh.bundle.patch` + `cordis.patch.yml`，外部 `dsh plugin add` 直接安装；开发期对 npm 版 `@deepseek-ai/dsh-* 0.1.0-rc.6`（peer 依赖）开发测试，DSH checkout 仅作 API 参考与冒烟挂载，不修改 checkout（不污染根目录与其他目录）。
 - 备选 `dsh-context-mount` 已否决：用户视角挂载的是文件内容，`file-mount` 直译、可检索、符合 `dsh-*` 家族。
 
 ## 3. 关键设计思想
