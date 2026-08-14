@@ -1,11 +1,12 @@
 /**
- * Mount ledger vocabulary (ported from piwpi's context-mount types.ts, trimmed
- * to v1). The session event augmentation makes the durable `file-mount/*`
- * events type-check at `session.append` call sites; the events carry the
- * `ignorable` marker because out-of-repo plugin types never enter DSH's
- * generated KNOWN_SESSION_EVENT_TYPES (see the plan doc, design idea 5).
+ * Mount ledger vocabulary. The ledger's durable carrier is the SOURCE of the
+ * plugin-injected context message (a standard `user/message` event — known to
+ * every DSH build, so persisted sessions always load). Custom session event
+ * types are NOT used: rc.6's `Session.append` cannot mark an event
+ * `ignorable`, and the persistence read path hard-refuses unknown types
+ * (verified against the compiled coordinator). Revisit when DSH opens a
+ * registration surface for out-of-repo event types.
  */
-import type {} from '@deepseek-ai/dsh-session/types'
 
 /** Mounted content segment: 1-based inclusive line range. */
 export interface Segment {
@@ -13,10 +14,10 @@ export interface Segment {
   end: number
 }
 
-/** How a mount extended the ledger (observability only; replay unions ranges). */
+/** How a mount extended the ledger (observability and fold semantics). */
 export type MountKind = 'new' | 'increment' | 'remount'
 
-/** Per-file mounted state kept in memory and folded from durable events. */
+/** Per-file mounted state kept in memory and folded from injected messages. */
 export interface MountedFile {
   /** Normalized absolute path (identity key). */
   absPath: string
@@ -28,21 +29,23 @@ export interface MountedFile {
   segments: Segment[]
 }
 
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /** One read window (or part of it) joined the mount ledger. */
-    'file-mount/mounted': {
-      path: string
-      hash: string
-      totalLines: number
-      segment: Segment
-      kind: MountKind
-    }
-    /** A hash mismatch dropped the previous mount for a path. */
-    'file-mount/invalidated': {
-      path: string
-      oldHash: string
-      newHash: string
-    }
-  }
+/**
+ * Structured mount state carried on the injected message's source
+ * (merge-extensible JSON; the model-visible content mirrors it).
+ */
+export interface MountSource {
+  kind: 'plugin'
+  plugin: 'file-mount'
+  /** Normalized absolute path (ledger identity). */
+  path: string
+  /** sha256 hex of the file content this mount was read from. */
+  hash: string
+  /** Line count of the file at hash time. */
+  totalLines: number
+  /** Ledger ranges AFTER this mount lands (normalized ascending). */
+  mounted: Segment[]
+  /** Ranges this message actually adds (normalized, in-window). */
+  added: Segment[]
+  /** How the ledger changed: fresh anchor, union, or hash-change remount. */
+  mountKind: MountKind
 }

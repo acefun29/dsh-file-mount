@@ -1,20 +1,28 @@
 /**
- * Per-session mount ledger (ported from piwpi's store.ts, refocused on the
- * single-file mount concern). One writer: the plugin's post-execute handler,
- * serialized by the tool pipeline. Replay folds durable `file-mount/*`
- * records so a resumed session reconstructs the same state.
+ * Per-session mount ledger. One writer: the plugin's post-execute handler,
+ * serialized by the tool pipeline. Replay folds the plugin-injected context
+ * messages' structured sources so a resumed session (and the browser client)
+ * reconstruct the same state from standard, persistence-safe events.
  */
 import { normalize } from './ranges.ts'
 import type { MountedFile, Segment } from './types.ts'
 
-/** Shape a replay consumer reads: raw event records from the session log. */
-export interface ReplayRecord {
+/** One user/message record as the ledger consumer reads it. */
+export interface LedgerRecord {
   type: string
-  data: unknown
+  source: unknown
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function isValidSegment(value: unknown): value is Segment {
+  if (!isRecord(value)) return false
+  const { start, end } = value
+  return typeof start === 'number' && typeof end === 'number'
+    && Number.isSafeInteger(start) && Number.isSafeInteger(end)
+    && start >= 1 && end >= start
 }
 
 export class MountStore {
@@ -52,27 +60,23 @@ export class MountStore {
   }
 
   /**
-   * Fold durable records in log order. Unknown or malformed records are
+   * Fold user/message records in log order; a file-mount source updates the
+   * ledger with its post-mount ranges. Unknown or malformed records are
    * skipped defensively (foreign logs must never break the ledger).
    */
-  replay(records: readonly ReplayRecord[]): void {
+  replay(records: readonly LedgerRecord[]): void {
     for (const record of records) {
-      if (record.type === 'file-mount/mounted') {
-        const d = isRecord(record.data) ? record.data : undefined
-        if (d === undefined) continue
-        const { path, hash, totalLines, segment } = d
-        if (typeof path !== 'string' || typeof hash !== 'string'
-          || typeof totalLines !== 'number' || !isRecord(segment)) continue
-        const { start, end } = segment
-        if (typeof start !== 'number' || typeof end !== 'number'
-          || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
-          || start < 1 || end < start) continue
-        this.mount({ absPath: path, hash, totalLines, segments: [{ start, end }] })
-      } else if (record.type === 'file-mount/invalidated') {
-        const d = isRecord(record.data) ? record.data : undefined
-        if (d === undefined || typeof d.path !== 'string') continue
-        this.invalidate(d.path)
-      }
+      if (record.type !== 'user/message' || !isRecord(record.source)) continue
+      const source = record.source
+      if (source['kind'] !== 'plugin' || source['plugin'] !== 'file-mount') continue
+      const { path, hash, totalLines, mounted, mountKind } = source
+      if (typeof path !== 'string' || path.length === 0
+        || typeof hash !== 'string' || hash.length === 0
+        || typeof totalLines !== 'number' || !Number.isSafeInteger(totalLines) || totalLines < 1
+        || (mountKind !== 'new' && mountKind !== 'increment' && mountKind !== 'remount')
+        || !Array.isArray(mounted) || mounted.length === 0
+        || !mounted.every(isValidSegment)) continue
+      this.mount({ absPath: path, hash, totalLines, segments: mounted })
     }
   }
 

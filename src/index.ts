@@ -1,0 +1,304 @@
+/**
+ * dsh-file-mount host half: incremental file mounting with read dedupe.
+ *
+ * One post-execute interception point owns the whole model-facing surface:
+ * after a successful text `read`, the plugin verifies the file identity
+ * (stat-verified cache), folds the returned window against the per-session
+ * mount ledger, and returns a PostToolDecision that (a) replaces the result
+ * content with a short marker when the window adds nothing new, and (b)
+ * injects the new ranges as plugin-sourced additionalContexts. The canonical
+ * tool value is preserved throughout, so UI read cards and the audit log
+ * stay intact.
+ *
+ * The ledger's durable carrier is the injected message SOURCE (structured,
+ * merge-extensible JSON on a standard `user/message` event), so resumed
+ * sessions and the browser client fold state from persistence-safe events.
+ *
+ * @module dsh-file-mount
+ */
+import type { Context } from '@deepseek-ai/cordis'
+import { Service } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { PostToolDecision, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-session/types'
+import { FileContentCache } from './file-cache.ts'
+import { normalizeAbsPath } from './paths.ts'
+import { subtract, type LineRange } from './ranges.ts'
+import {
+  formatRange,
+  markerHead,
+  renderDedupMarker,
+  renderMountBlock,
+  renderRemountMarker,
+} from './render.ts'
+import { MountStore } from './store.ts'
+import type { MountKind, MountedFile, MountSource, Segment } from './types.ts'
+
+export { FileContentCache } from './file-cache.ts'
+export { MountStore, type LedgerRecord } from './store.ts'
+export { normalize, subtract, clamp, type LineRange } from './ranges.ts'
+export { hashBuffer } from './hash.ts'
+export { normalizeAbsPath } from './paths.ts'
+export {
+  formatRange,
+  markerHead,
+  renderDedupMarker,
+  renderMountBlock,
+  renderRemountMarker,
+} from './render.ts'
+export type { MountedFile, MountKind, MountSource, Segment } from './types.ts'
+
+/** Plugin config: ledger limits and the global kill switch. */
+export interface Config {
+  /** Master switch; disabled keeps every read native. */
+  enabled?: boolean
+  /** File identity cache capacity (pinned mounts exempt). */
+  capacity?: number
+  /** File identity cache TTL (safety valve, ms). */
+  ttlMs?: number
+}
+
+export const Config: z<Config> = z.object({
+  enabled: z.boolean().default(true),
+  capacity: z.number().step(1).min(1).default(32),
+  ttlMs: z.number().step(1).min(1000).default(300_000),
+})
+
+export const name = 'file-mount'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Live mount service: per-session ledgers plus the shared file cache. */
+    fileMount: FileMountService
+  }
+}
+
+/** Narrow shape of a successful `read` canonical value (v1 contract). */
+interface ReadValue {
+  path: string
+  offset: number
+  lines: { number: number; text: string }[]
+  totalLines: number
+}
+
+function asReadValue(value: unknown): ReadValue | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const v = value as Record<string, unknown>
+  if (typeof v['path'] !== 'string' || typeof v['offset'] !== 'number'
+    || typeof v['totalLines'] !== 'number' || !Array.isArray(v['lines'])) return undefined
+  const lines: { number: number; text: string }[] = []
+  for (const item of v['lines']) {
+    if (typeof item !== 'object' || item === null) return undefined
+    const line = item as Record<string, unknown>
+    if (typeof line['number'] !== 'number' || typeof line['text'] !== 'string') return undefined
+    lines.push({ number: line['number'], text: line['text'] })
+  }
+  return { path: v['path'], offset: v['offset'], lines, totalLines: v['totalLines'] }
+}
+
+function textBlock(text: string): { type: 'text'; text: string } {
+  return { type: 'text', text }
+}
+
+/**
+ * Host service: per-session mount ledgers, the stat-verified file identity
+ * cache, and resume replay from injected message sources.
+ */
+export class FileMountService extends Service {
+  static inject = []
+
+  private readonly enabled: boolean
+  private readonly cache: FileContentCache
+  private readonly stores = new Map<string, MountStore>()
+  private readonly restores = new Map<string, Promise<void>>()
+
+  constructor(ctx: Context, config: Config = {}) {
+    super(ctx, 'fileMount')
+    const resolved = Config(config)
+    this.enabled = resolved.enabled ?? true
+    this.cache = new FileContentCache({
+      ...resolved.capacity !== undefined ? { capacity: resolved.capacity } : {},
+      ...resolved.ttlMs !== undefined ? { ttlMs: resolved.ttlMs } : {},
+    })
+
+    ctx.on('agent/session-start', ({ agent, source }) => {
+      if (source === 'resume') void this.kickoffRestore(agent)
+      if (source === 'clear' || source === 'compact') this.resetLedger(agent)
+    })
+
+    ctx.on('tools/post-execute', async (exec, result, next): Promise<PostToolDecision> => {
+      const downstream = await next()
+      if (!this.enabled || downstream.kind !== 'accept' || exec.name !== 'read') return downstream
+      if (exec.agent === undefined || result.isError) return downstream
+      return this.onReadResult(exec.agent, result, downstream)
+    })
+  }
+
+  /** Fold one successful read into the ledger and reshape the decision. */
+  private async onReadResult(
+    agent: Agent,
+    result: ToolExecutionResult,
+    downstream: Extract<PostToolDecision, { kind: 'accept' }>,
+  ): Promise<PostToolDecision> {
+    if (result.isError || result.value === undefined) return downstream
+    const value = asReadValue(result.value)
+    if (value === undefined || value.lines.length === 0
+      || !Number.isSafeInteger(value.offset) || value.offset < 1) return downstream
+    const absPath = normalizeAbsPath(value.path)
+    const entry = await this.cache.get(absPath)
+    if (entry === null) return downstream
+    const store = await this.storeFor(agent)
+    const existing = store.get(absPath)
+    const windowStart = value.offset
+    const windowEnd = Math.min(windowStart + value.lines.length - 1, value.totalLines)
+    const want: LineRange = { start: windowStart, end: windowEnd }
+    const mounted = existing?.segments ?? []
+
+    if (existing !== undefined && existing.hash === entry.hash) {
+      const missing = subtract(mounted, want)
+      if (missing.length === 0) {
+        // Full coverage: the window adds nothing; replace with a short marker.
+        if (downstream.value !== undefined) return downstream
+        return {
+          kind: 'accept',
+          content: [textBlock(renderDedupMarker(value.path, entry.hash, mounted))],
+          ...downstream.additionalContexts !== undefined ? { additionalContexts: downstream.additionalContexts } : {},
+        }
+      }
+      this.mount(store, absPath, entry.hash, value.totalLines, missing)
+      const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment')
+      const block = renderMountBlock({
+        path: value.path,
+        hash: entry.hash,
+        mounted: source.mounted,
+        windowStart,
+        lines: value.lines.map((line) => line.text),
+        missing,
+      })
+      const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
+      if (downstream.value !== undefined) return downstream
+      return {
+        kind: 'accept',
+        content: [textBlock(`[file-mount: ${value.path}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`)],
+        additionalContexts: [...downstream.additionalContexts ?? [], this.contextMessage(block, source)],
+      }
+    }
+
+    // New file or changed content: remount the whole window as a fresh anchor.
+    const kind: MountKind = existing === undefined ? 'new' : 'remount'
+    this.mount(store, absPath, entry.hash, value.totalLines, [want])
+    this.cache.pin(absPath)
+    if (kind === 'new') {
+      // First read of a file stays native (the read result IS the anchor);
+      // a head-only state message carries the ledger to UI folds.
+      if (downstream.value !== undefined) return downstream
+      return {
+        kind: 'accept',
+        additionalContexts: [
+          ...downstream.additionalContexts ?? [],
+          this.contextMessage(markerHead(value.path, entry.hash, [want]), this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new')),
+        ],
+      }
+    }
+    const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'remount')
+    const block = renderMountBlock({
+      path: value.path,
+      hash: entry.hash,
+      mounted: source.mounted,
+      windowStart,
+      lines: value.lines.map((line) => line.text),
+      missing: [want],
+    })
+    if (downstream.value !== undefined) return downstream
+    return {
+      kind: 'accept',
+      content: [textBlock(renderRemountMarker(value.path, entry.hash, source.mounted))],
+      additionalContexts: [...downstream.additionalContexts ?? [], this.contextMessage(block, source)],
+    }
+  }
+
+  /** The structured source state for one injected message. */
+  private mountSource(store: MountStore, absPath: string, hash: string, totalLines: number, added: Segment[], mountKind: MountKind): MountSource {
+    return {
+      kind: 'plugin',
+      plugin: 'file-mount',
+      path: absPath,
+      hash,
+      totalLines,
+      mounted: store.mountedSegments(absPath),
+      added,
+      mountKind,
+    }
+  }
+
+  /** The plugin-sourced context message carrying one mount block. */
+  private contextMessage(block: string, source: MountSource) {
+    return createUserMessage({
+      content: [{ type: 'text', text: block }],
+      source,
+    })
+  }
+
+  /** Record segments and pin the identity in the file cache. */
+  private mount(store: MountStore, absPath: string, hash: string, totalLines: number, segments: Segment[]): void {
+    store.mount({ absPath, hash, totalLines, segments })
+    this.cache.pin(absPath)
+  }
+
+  /** Per-session ledger, restored lazily on first access (resume race guard). */
+  private storeFor(agent: Agent): Promise<MountStore> {
+    const id = agent.id
+    const existing = this.stores.get(id)
+    if (existing !== undefined) return Promise.resolve(existing)
+    const pending = this.restores.get(id) ?? this.kickoffRestore(agent)
+    return pending.then(() => {
+      let store = this.stores.get(id)
+      if (store === undefined) {
+        store = new MountStore()
+        this.stores.set(id, store)
+      }
+      return store
+    })
+  }
+
+  /** Replay the ledger from plugin-injected message sources in the live log. */
+  private kickoffRestore(agent: Agent): Promise<void> {
+    const existing = this.restores.get(agent.id)
+    if (existing !== undefined) return existing
+    const pending = (async () => {
+      const store = new MountStore()
+      store.replay(agent.session.events
+        .filter((event) => event.type === 'user/message')
+        .map((event) => ({ type: event.type, source: event.data.source })))
+      this.stores.set(agent.id, store)
+    })().finally(() => { this.restores.delete(agent.id) })
+    this.restores.set(agent.id, pending)
+    return pending
+  }
+
+  /** Forget the ledger (clear/compact): the context guarantee is gone. */
+  private resetLedger(agent: Agent): void {
+    const store = this.stores.get(agent.id)
+    if (store !== undefined) {
+      for (const file of store.all()) this.cache.unpin(file.absPath)
+      store.clear()
+    }
+  }
+
+  /** Live ledger snapshot for UIs and tests. */
+  ledger(agent: Agent): MountedFile[] {
+    return this.stores.get(agent.id)?.all() ?? []
+  }
+}
+
+/**
+ * Register the file-mount service (the interception listener lives on the
+ * service fiber so its lifecycle rides the plugin's disposal).
+ * @param ctx - host context.
+ * @param config - plugin config after Loader validation.
+ */
+export function apply(ctx: Context, config: Config = {}): void {
+  ctx.plugin(FileMountService, config)
+}
