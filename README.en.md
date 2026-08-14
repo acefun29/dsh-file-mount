@@ -13,11 +13,8 @@ Ported from [piwpi](https://github.com/earendil-works/pi-mono)'s context-mount m
 ## Install
 
 ```sh
-# From npm
-npx @deepseek-ai/dsh plugin --profile web add dsh-file-mount
-
-# Or from GitHub (authorize the package build in the profile's pnpm-workspace.yaml)
-npx @deepseek-ai/dsh plugin --profile web add github:you/dsh-file-mount
+# From GitHub (authorize the package build in the profile's pnpm-workspace.yaml)
+npx @deepseek-ai/dsh plugin --profile web add github:acefun29/dsh-file-mount
 
 # Or a local checkout / tarball
 npx @deepseek-ai/dsh plugin --profile web add file:../dsh-file-mount
@@ -63,7 +60,7 @@ pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown (lib/index.js / lib/invariant.js / lib/client.js)
 ```
 
-Peers on DSH 0.1.0-rc.6 (`@deepseek-ai/dsh-*`, `@deepseek-ai/cordis` ^4, React 18).
+Peers on DSH 0.1.0-rc.5 and later (`@deepseek-ai/dsh-*`, `@deepseek-ai/cordis` ^4, React 18).
 
 ## License
 

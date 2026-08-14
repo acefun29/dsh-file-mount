@@ -13,11 +13,8 @@ DeepSeek Harness 插件：**文件增量挂载 + 重复读取去重**。记录�
 ## 安装
 
 ```sh
-# 从 npm
-npx @deepseek-ai/dsh plugin --profile web add dsh-file-mount
-
-# 或从 GitHub（需在 profile 的 pnpm-workspace.yaml 里授权该包的 prepare 构建）
-npx @deepseek-ai/dsh plugin --profile web add github:you/dsh-file-mount
+# 从 GitHub（需在 profile 的 pnpm-workspace.yaml 里授权该包的 prepare 构建）
+npx @deepseek-ai/dsh plugin --profile web add github:acefun29/dsh-file-mount
 
 # 或本地目录 / tarball
 npx @deepseek-ai/dsh plugin --profile web add file:../dsh-file-mount
@@ -58,12 +55,12 @@ npx @deepseek-ai/dsh --profile web
 
 ```sh
 pnpm install
-pnpm test        # vitest（60 用例：单元 + 真实 read 循环集成 + 持久化往返 + 客户端组件）
+pnpm test        # vitest（67 用例：单元 + 真实 read 循环集成 + 持久化往返 + 客户端组件）
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown（lib/index.js / lib/invariant.js / lib/client.js）
 ```
 
-依赖 DSH 0.1.0-rc.6（peer 依赖 `@deepseek-ai/dsh-*`、`@deepseek-ai/cordis` ^4、React 18）。
+依赖 DSH 0.1.0-rc.5 及以上（peer 依赖 `@deepseek-ai/dsh-*`、`@deepseek-ai/cordis` ^4、React 18）。
 
 ## License
 

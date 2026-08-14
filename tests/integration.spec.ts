@@ -99,7 +99,8 @@ describe('file-mount integration', () => {
 
     // c3 (partial): short content marker; the missing tail rides the injected message.
     expect(resultText(agent, 'c3')).toContain('+L5-6')
-    expect(resultText(agent, 'c3')).not.toContain('3')
+    // The result is only the short marker: the native read body wrapper is gone.
+    expect(resultText(agent, 'c3')).not.toContain('<content>')
 
     // The injected increment message carries the missing body in model view.
     const increment = agent.session.events.find((e) => e.type === 'user/message'
