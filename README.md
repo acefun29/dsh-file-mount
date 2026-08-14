@@ -58,7 +58,7 @@ npx @deepseek-ai/dsh --profile web
 pnpm install
 pnpm test        # vitest（74 用例：单元 + 真实 read 循环集成 + 持久化往返 + 压缩感知 + 客户端组件）
 pnpm typecheck   # tsc --noEmit
-pnpm run build   # tsc + tsdown（lib/index.js / lib/invariant.js / lib/client.js）
+pnpm run build   # tsc + tsdown（lib/index.js / lib/client.js）
 ```
 
 依赖 DSH 0.1.0-rc.5 及以上（peer 依赖 `@deepseek-ai/dsh-*`、`@deepseek-ai/cordis` ^4、React 18）。

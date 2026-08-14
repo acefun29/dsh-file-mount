@@ -132,7 +132,7 @@ export class FileMountService extends Service {
     })
 
     ctx.on('agent/session-start', ({ agent, source }) => {
-      if (source === 'resume') void this.kickoffRestore(agent)
+      if (source === 'resume') void this.kickoffRestore(agent).catch(() => {})
       // 'clear'/'compact' are declared in DSH's SessionStartSource union but not
       // yet emitted by any harness code — defensive wiring until they are. The
       // live checkpoint sweep (storeFor) covers compaction today.
@@ -157,6 +157,20 @@ export class FileMountService extends Service {
     const value = asReadValue(result.value)
     if (value === undefined || value.lines.length === 0
       || !Number.isSafeInteger(value.offset) || value.offset < 1) return downstream
+    try {
+      return await this.onReadResultInner(agent, value, downstream)
+    } catch {
+      // A mount decision must never fail a read: fall back to the native result.
+      return downstream
+    }
+  }
+
+  /** Decision body after the cheap guards, isolated so it can never throw out. */
+  private async onReadResultInner(
+    agent: Agent,
+    value: ReadValue,
+    downstream: Extract<PostToolDecision, { kind: 'accept' }>,
+  ): Promise<PostToolDecision> {
     const absPath = normalizeAbsPath(value.path)
     const entry = await this.cache.get(absPath)
     if (entry === null) return downstream
@@ -367,7 +381,12 @@ export class FileMountService extends Service {
     if (existing !== undefined) return existing
     const pending = (async () => {
       const store = new MountStore()
-      store.replay(this.visibleMountRecords(agent))
+      try {
+        store.replay(this.visibleMountRecords(agent))
+      } catch {
+        // A defensive replay must never reject: an empty ledger is always safe
+        // (the next reads simply re-anchor). Never let restore crash the host.
+      }
       this.stores.set(agent.id, store)
       this.cursors.set(agent.id, agent.session.events.length)
     })().finally(() => { this.restores.delete(agent.id) })

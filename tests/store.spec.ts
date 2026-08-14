@@ -78,6 +78,25 @@ describe('MountStore', () => {
     expect(store.all()).toEqual([])
   })
 
+  it('replays a legacy v0.1.0 mount (no form/summary/savedTokens) as savedTokens 0', () => {
+    // A pre-token-stats message must never break the ledger (or session load).
+    const store = new MountStore()
+    store.replay([{
+      type: 'user/message',
+      source: {
+        kind: 'plugin',
+        plugin: 'file-mount',
+        path: 'a.ts',
+        hash: 'h1',
+        totalLines: 100,
+        mounted: [{ start: 1, end: 50 }],
+        added: [{ start: 1, end: 50 }],
+        mountKind: 'new',
+      },
+    }])
+    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0 })
+  })
+
   it('clear empties the ledger', () => {
     const store = new MountStore()
     store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 10, segments: [{ start: 1, end: 10 }], savedTokens: 0 })

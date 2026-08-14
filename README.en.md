@@ -58,7 +58,7 @@ The plugin sits on the `tools/post-execute` interception point:
 pnpm install
 pnpm test        # vitest: unit + real read-loop integration + persistence round trip + client components
 pnpm typecheck   # tsc --noEmit
-pnpm run build   # tsc + tsdown (lib/index.js / lib/invariant.js / lib/client.js)
+pnpm run build   # tsc + tsdown (lib/index.js / lib/client.js)
 ```
 
 Peers on DSH 0.1.0-rc.5 and later (`@deepseek-ai/dsh-*`, `@deepseek-ai/cordis` ^4, React 18).

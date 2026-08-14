@@ -1,8 +1,8 @@
 /**
  * Standalone dual-face build for dsh-file-mount.
  *
- * Host half: lib/index.js + lib/invariant.js, all @deepseek-ai/* modules
- * externalized (the DSH profile resolves them at runtime).
+ * Host half: lib/index.js, all @deepseek-ai/* modules externalized
+ * (the DSH profile resolves them at runtime).
  *
  * Client half: lib/client.js following the harness's module-loader
  * convention (window.__ModuleLoader__.load banner; externals from the
@@ -82,7 +82,7 @@ const purityGate = {
 export default defineConfig([
   {
     name: PACKAGE_ID,
-    entry: ['src/index.ts', 'src/invariant.ts'],
+    entry: ['src/index.ts'],
     outDir: 'lib',
     format: ['esm'],
     platform: 'node',
