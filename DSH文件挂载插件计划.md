@@ -63,3 +63,14 @@
 - 文档：README.md / README.zh.md
 - 发布件：`cordis.patch.yml`（host + client 两行）+ `dsh.bundle` / `dsh.client` manifest + `prepare` 脚本
 - 验收：`--patch` overlay 接线 DSH checkout 冒烟 + `dsh plugin add` 安装冒烟（浏览器三处可见）
+
+## 7. 后续优化（本期不做，仅记录）
+
+- **Token 节省统计与提醒**（MVP 后优先做）：每次去重时估算省下的 token 并在 UI 给出提醒。设计预想：
+  - 数据来源：宿主在 `file-mount/*` 事件里附带 `savedTokens` 估算（noop = 整个被去重窗口的 token 数；增量 = 已覆盖区间的 token 数；按「字符数 ÷ 4」粗略估算，精确 tokenizer 二期再议），客户端事件折叠自然汇总，无需新增数据通道；
+  - 展示形态（DSH 风格）：挂载文件视图顶部加「本次会话累计节省 ≈ N tokens」汇总行；单次去重时在对话的上下文注入行摘要里显示「节省 ≈ N tokens」；后续可加一次性 toast 提醒；
+  - 边界：只算因本插件去重而不再进入上下文的部分，不重复计算。
+- **fingerprint 移植**：piwpi 的行级 / 块级指纹与变更行数量化，配合未来可能的跨会话磁盘驱动失效判定。
+- **grep 挂载**：grep 结果的证据式挂载，v1 不接管。
+- **compaction 联动**：待 DSH 把 compaction 纳入拦截面后，压缩时同步失效已挂载区间。
+- **输入重写省 IO**：待 DSH 开放 pre-tool input rewrite 后，增量读取改写 offset/limit 减少磁盘 IO（当前只省模型 token）。
