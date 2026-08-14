@@ -11,3 +11,4 @@ lib/
 /*.md
 !/README.md
 !/README.en.md
+!AGENTS.md
