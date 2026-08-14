@@ -23,31 +23,40 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
 /** Narrow-and-fail: explicit return type keeps control-flow narrowing working. */
 function recordOrFail(value: unknown, fail: (message: string) => never, label: string): Record<string, unknown> {
   if (!isRecord(value)) fail(label)
   return value
 }
 
+function isValidSegment(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  const { start, end } = value
+  return isPositiveInteger(start) && isPositiveInteger(end) && end >= start
+}
+
 function isValidSegmentList(value: unknown): boolean {
   if (!Array.isArray(value) || value.length === 0) return false
-  return value.every((segment) => {
-    if (!isRecord(segment)) return false
-    const { start, end } = segment
-    return isPositiveInteger(start) && isPositiveInteger(end) && end >= start
-  })
+  return value.every(isValidSegment)
 }
 
 /** Validate one plugin-injected mount message's structured source. */
 function validateMountSource(source: Record<string, unknown>, fail: (message: string) => never): void {
+  if (source['form'] !== 'notice') fail('file-mount source form must be "notice"')
+  if (!isNonEmptyString(source['summary'])) fail('file-mount source summary must be a non-empty string')
   if (!isNonEmptyString(source['path'])) fail('file-mount source path must be a non-empty string')
   if (!isNonEmptyString(source['hash'])) fail('file-mount source hash must be a non-empty string')
   if (!isPositiveInteger(source['totalLines'])) fail('file-mount source totalLines must be a positive safe integer')
-  if (source['mountKind'] !== 'new' && source['mountKind'] !== 'increment' && source['mountKind'] !== 'remount') {
-    fail('file-mount source mountKind must be new, increment, or remount')
+  if (source['mountKind'] !== 'new' && source['mountKind'] !== 'increment' && source['mountKind'] !== 'remount' && source['mountKind'] !== 'dedup') {
+    fail('file-mount source mountKind must be new, increment, remount, or dedup')
   }
+  if (!isNonNegativeInteger(source['savedTokens'])) fail('file-mount source savedTokens must be a non-negative safe integer')
   if (!isValidSegmentList(source['mounted'])) fail('file-mount source mounted must be a non-empty valid segment list')
-  if (!isValidSegmentList(source['added'])) fail('file-mount source added must be a non-empty valid segment list')
+  if (!Array.isArray(source['added']) || !source['added'].every(isValidSegment)) fail('file-mount source added must be a valid segment list (may be empty)')
 }
 
 /** Install checks over the injected mount message stream. */

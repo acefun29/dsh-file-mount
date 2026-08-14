@@ -18,12 +18,15 @@ function mountSource(overrides: Record<string, unknown> = {}): Record<string, un
   return {
     kind: 'plugin',
     plugin: 'file-mount',
+    form: 'notice',
+    summary: 'mounted L1-50',
     path: 'src/a.ts',
     hash: 'h1',
     totalLines: 100,
     mounted: [{ start: 1, end: 50 }],
     added: [{ start: 1, end: 50 }],
     mountKind: 'new',
+    savedTokens: 0,
     ...overrides,
   }
 }
@@ -42,6 +45,7 @@ describe('foldMounts', () => {
       totalLines: 100,
       ranges: [{ start: 1, end: 50 }],
       mountKind: 'new',
+      savedTokens: 0,
     })
   })
 
@@ -54,18 +58,29 @@ describe('foldMounts', () => {
     expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 80 }])
     expect(mounts[0]!.mountKind).toBe('increment')
     expect(mounts[0]!.seq).toBe(2)
+    expect(mounts[0]!.savedTokens).toBe(0)
   })
 
   it('replaces the entry wholesale on a hash change', () => {
     const mounts = foldMounts([
       contextNode(mountSource(), 1),
-      contextNode(mountSource({ hash: 'h2', totalLines: 120, mounted: [{ start: 1, end: 20 }], added: [{ start: 1, end: 20 }], mountKind: 'remount' }), 2),
+      contextNode(mountSource({ hash: 'h2', totalLines: 120, mounted: [{ start: 1, end: 20 }], added: [{ start: 1, end: 20 }], mountKind: 'remount', savedTokens: 9 }), 2),
     ])
     expect(mounts).toHaveLength(1)
     expect(mounts[0]!.hash).toBe('h2')
     expect(mounts[0]!.totalLines).toBe(120)
     expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 20 }])
     expect(mounts[0]!.mountKind).toBe('remount')
+    expect(mounts[0]!.savedTokens).toBe(9)
+  })
+
+  it('accumulates savedTokens across same-hash increments and dedups', () => {
+    const mounts = foldMounts([
+      contextNode(mountSource(), 1),
+      contextNode(mountSource({ added: [{ start: 51, end: 60 }], mountKind: 'increment', savedTokens: 8 }), 2),
+      contextNode(mountSource({ added: [], mountKind: 'dedup', savedTokens: 5 }), 3),
+    ])
+    expect(mounts[0]!.savedTokens).toBe(13)
   })
 
   it('skips foreign nodes and malformed sources', () => {

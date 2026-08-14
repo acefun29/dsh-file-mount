@@ -10,6 +10,15 @@
   box-sizing: border-box;
 }
 
+.summary {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  background: var(--badge-bg, rgba(96, 165, 250, 0.18));
+  color: var(--badge-fg, #93c5fd);
+}
+
 .empty {
   color: var(--text-secondary, #8a8f98);
   font-size: 13px;
@@ -60,6 +69,12 @@
 }
 
 .hash,
-.lines {
+.lines,
+.saved {
   white-space: nowrap;
+}
+
+.saved {
+  margin-left: auto;
+  color: var(--badge-fg, #93c5fd);
 }

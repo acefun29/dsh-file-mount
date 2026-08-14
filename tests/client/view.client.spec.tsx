@@ -38,24 +38,29 @@ describe('MountedFilesView', () => {
         source: {
           kind: 'plugin',
           plugin: 'file-mount',
+          form: 'notice',
+          summary: 'mounted L1-50',
           path: 'src/a.ts',
           hash: 'abcdef0123456789',
           totalLines: 100,
           mounted: [{ start: 1, end: 50 }],
           added: [{ start: 1, end: 50 }],
           mountKind: 'new',
+          savedTokens: 0,
         },
         provenance: { role: 'inject', label: 'file-mount' },
-        form: null,
+        form: 'notice',
       },
     ]
     const { container } = render(<MountedFilesView {...viewProps(nodes)} />)
+    expect(container.querySelector('[data-mount-summary]')?.textContent).toBe(zh['summary.savedTotal'].replace('{n}', '0'))
     const rows = container.querySelectorAll('[data-mount-row]')
     expect(rows).toHaveLength(1)
     expect(rows[0]!.querySelector('[data-mount-badge]')?.textContent).toBe(zh['kind.new'])
     expect(rows[0]!.querySelector('[data-mount-ranges]')?.textContent).toBe('L1-50')
     expect(rows[0]!.querySelector('[data-mount-hash]')?.textContent).toContain('abcdef01')
     expect(rows[0]!.querySelector('[data-mount-lines]')?.textContent).toBe('100 ' + zh['list.lines'])
+    expect(rows[0]!.querySelector('[data-mount-saved]')?.textContent).toBe(zh['row.saved'].replace('{n}', '0'))
     expect(rows[0]!.getAttribute('data-mount-kind')).toBe('new')
   })
 
@@ -70,12 +75,15 @@ describe('MountedFilesView', () => {
         source: {
           kind: 'plugin',
           plugin: 'file-mount',
+          form: 'notice',
+          summary: 'mounted L1-4',
           path: 'src/a.ts',
           hash: 'abcdef0123456789',
           totalLines: 10,
           mounted: [{ start: 1, end: 4 }],
           added: [{ start: 1, end: 4 }],
           mountKind: 'new',
+          savedTokens: 0,
         },
         provenance: { role: 'inject', label: 'file-mount' },
         form: null,

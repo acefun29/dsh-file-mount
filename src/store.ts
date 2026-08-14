@@ -43,14 +43,19 @@ export class MountStore {
   /**
    * Union a mounted window into the ledger. A hash mismatch proves the
    * on-disk content changed, so the previous entry is replaced wholesale
-   * (the new window becomes the fresh anchor).
+   * (the new window becomes the fresh anchor). Saved-token totals are
+   * session-cumulative: they survive a hash-change replacement.
    */
   mount(file: MountedFile): void {
     const existing = this.files.get(file.absPath)
     if (existing !== undefined && existing.hash === file.hash) {
       existing.segments = normalize([...existing.segments, ...file.segments])
+      existing.savedTokens += file.savedTokens
     } else {
-      this.files.set(file.absPath, file)
+      this.files.set(file.absPath, {
+        ...file,
+        savedTokens: (existing?.savedTokens ?? 0) + file.savedTokens,
+      })
     }
   }
 
@@ -69,14 +74,17 @@ export class MountStore {
       if (record.type !== 'user/message' || !isRecord(record.source)) continue
       const source = record.source
       if (source['kind'] !== 'plugin' || source['plugin'] !== 'file-mount') continue
-      const { path, hash, totalLines, mounted, mountKind } = source
+      const { path, hash, totalLines, mounted, mountKind, savedTokens } = source
       if (typeof path !== 'string' || path.length === 0
         || typeof hash !== 'string' || hash.length === 0
         || typeof totalLines !== 'number' || !Number.isSafeInteger(totalLines) || totalLines < 1
-        || (mountKind !== 'new' && mountKind !== 'increment' && mountKind !== 'remount')
+        || (mountKind !== 'new' && mountKind !== 'increment' && mountKind !== 'remount' && mountKind !== 'dedup')
         || !Array.isArray(mounted) || mounted.length === 0
         || !mounted.every(isValidSegment)) continue
-      this.mount({ absPath: path, hash, totalLines, segments: mounted })
+      const saved = typeof savedTokens === 'number' && Number.isSafeInteger(savedTokens) && savedTokens >= 0
+        ? savedTokens
+        : 0
+      this.mount({ absPath: path, hash, totalLines, segments: mounted, savedTokens: saved })
     }
   }
 

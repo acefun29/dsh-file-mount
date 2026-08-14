@@ -34,6 +34,7 @@ import {
   renderRemountMarker,
 } from './render.ts'
 import { MountStore } from './store.ts'
+import { estimateRangeTokens } from './tokens.ts'
 import type { MountKind, MountedFile, MountSource, Segment } from './types.ts'
 
 export { FileContentCache } from './file-cache.ts'
@@ -159,22 +160,36 @@ export class FileMountService extends Service {
     if (existing !== undefined && existing.hash === entry.hash) {
       const missing = subtract(mounted, want)
       if (missing.length === 0) {
-        // Full coverage: the window adds nothing; replace with a short marker.
+        // Full coverage: the window adds nothing. Replace the result with the
+        // short marker and record the saving on a head-only state message.
         if (downstream.value !== undefined) return downstream
+        const lines = value.lines.map((line) => line.text)
+        const savedTokens = estimateRangeTokens(lines, windowStart, [want])
+        store.mount({ absPath, hash: entry.hash, totalLines: value.totalLines, segments: [], savedTokens })
+        const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [], 'dedup', savedTokens)
         return {
           kind: 'accept',
           content: [textBlock(renderDedupMarker(value.path, entry.hash, mounted))],
-          ...downstream.additionalContexts !== undefined ? { additionalContexts: downstream.additionalContexts } : {},
+          additionalContexts: [
+            ...downstream.additionalContexts ?? [],
+            this.contextMessage(
+              `${markerHead(value.path, entry.hash, mounted)} - already mounted, saved ≈ ${savedTokens} tokens`,
+              source,
+            ),
+          ],
         }
       }
-      this.mount(store, absPath, entry.hash, value.totalLines, missing)
-      const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment')
+      const lines = value.lines.map((line) => line.text)
+      const covered = subtract(missing, want)
+      const savedTokens = estimateRangeTokens(lines, windowStart, covered)
+      this.mount(store, absPath, entry.hash, value.totalLines, missing, savedTokens)
+      const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment', savedTokens)
       const block = renderMountBlock({
         path: value.path,
         hash: entry.hash,
         mounted: source.mounted,
         windowStart,
-        lines: value.lines.map((line) => line.text),
+        lines,
         missing,
       })
       const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
@@ -188,7 +203,7 @@ export class FileMountService extends Service {
 
     // New file or changed content: remount the whole window as a fresh anchor.
     const kind: MountKind = existing === undefined ? 'new' : 'remount'
-    this.mount(store, absPath, entry.hash, value.totalLines, [want])
+    this.mount(store, absPath, entry.hash, value.totalLines, [want], 0)
     this.cache.pin(absPath)
     if (kind === 'new') {
       // First read of a file stays native (the read result IS the anchor);
@@ -198,11 +213,14 @@ export class FileMountService extends Service {
         kind: 'accept',
         additionalContexts: [
           ...downstream.additionalContexts ?? [],
-          this.contextMessage(markerHead(value.path, entry.hash, [want]), this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new')),
+          this.contextMessage(
+            markerHead(value.path, entry.hash, [want]),
+            this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', 0),
+          ),
         ],
       }
     }
-    const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'remount')
+    const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'remount', 0)
     const block = renderMountBlock({
       path: value.path,
       hash: entry.hash,
@@ -220,17 +238,37 @@ export class FileMountService extends Service {
   }
 
   /** The structured source state for one injected message. */
-  private mountSource(store: MountStore, absPath: string, hash: string, totalLines: number, added: Segment[], mountKind: MountKind): MountSource {
+  private mountSource(
+    store: MountStore,
+    absPath: string,
+    hash: string,
+    totalLines: number,
+    added: Segment[],
+    mountKind: MountKind,
+    savedTokens: number,
+  ): MountSource {
     return {
       kind: 'plugin',
       plugin: 'file-mount',
+      form: 'notice',
+      summary: this.mountSummary(mountKind, added, savedTokens),
       path: absPath,
       hash,
       totalLines,
       mounted: store.mountedSegments(absPath),
       added,
       mountKind,
+      savedTokens,
     }
+  }
+
+  /** One-line account of a mount (collapsed context-row summary). */
+  private mountSummary(mountKind: MountKind, added: Segment[], savedTokens: number): string {
+    if (mountKind === 'dedup') return `saved ≈ ${savedTokens} tokens`
+    const ranges = added.map((s) => formatRange(s.start, s.end)).join(', ')
+    if (mountKind === 'new') return `mounted ${ranges}`
+    if (mountKind === 'remount') return `file changed - remounted ${ranges}`
+    return savedTokens > 0 ? `+${ranges} - saved ≈ ${savedTokens} tokens` : `+${ranges}`
   }
 
   /** The plugin-sourced context message carrying one mount block. */
@@ -242,8 +280,8 @@ export class FileMountService extends Service {
   }
 
   /** Record segments and pin the identity in the file cache. */
-  private mount(store: MountStore, absPath: string, hash: string, totalLines: number, segments: Segment[]): void {
-    store.mount({ absPath, hash, totalLines, segments })
+  private mount(store: MountStore, absPath: string, hash: string, totalLines: number, segments: Segment[], savedTokens: number): void {
+    store.mount({ absPath, hash, totalLines, segments, savedTokens })
     this.cache.pin(absPath)
   }
 

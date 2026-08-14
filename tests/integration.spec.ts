@@ -72,13 +72,30 @@ describe('file-mount integration', () => {
     // c1 (first read): the read result stays native; a head-only state message lands.
     expect(resultText(agent, 'c1')).toContain('<content>')
     const sources = mountMessages(agent)
-    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'increment'])
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'dedup', 'increment'])
     expect(sources[0]!['mounted']).toEqual([{ start: 1, end: 4 }])
-    expect(sources[1]!['added']).toEqual([{ start: 5, end: 6 }])
-    expect(sources[1]!['mounted']).toEqual([{ start: 1, end: 6 }])
+    expect(sources[0]!['savedTokens']).toBe(0)
+    expect(sources[0]!['form']).toBe('notice')
+    expect(sources[0]!['summary']).toBe('mounted L1-4')
+    expect(sources[1]!['mountKind']).toBe('dedup')
+    expect(sources[1]!['savedTokens']).toBe(4)
+    expect(sources[1]!['added']).toEqual([])
+    expect(sources[2]!['added']).toEqual([{ start: 5, end: 6 }])
+    expect(sources[2]!['mounted']).toEqual([{ start: 1, end: 6 }])
+    expect(sources[2]!['savedTokens']).toBe(2)
+    expect(sources[2]!['summary']).toBe('+L5-6 - saved ≈ 2 tokens')
 
     // c2 (full coverage): short dedup marker, nothing re-added.
     expect(resultText(agent, 'c2')).toContain('mounted:L1-4] - already mounted, not re-added')
+
+    // The dedup decision also leaves a short note message in the log.
+    const dedupNote = agent.session.events.find((e) => e.type === 'user/message'
+      && typeof e.data.source === 'object' && e.data.source !== null
+      && e.data.source['mountKind'] === 'dedup')
+    expect(dedupNote !== undefined && dedupNote.type === 'user/message'
+      && dedupNote.data.content[0] !== undefined && dedupNote.data.content[0].type === 'text'
+      ? dedupNote.data.content[0].text
+      : '').toContain('saved ≈ 4 tokens')
 
     // c3 (partial): short content marker; the missing tail rides the injected message.
     expect(resultText(agent, 'c3')).toContain('+L5-6')
@@ -94,10 +111,11 @@ describe('file-mount integration', () => {
       : ''
     expect(incrementText).toContain('--- L5-6 ---')
 
-    // Ledger: one file, hash verified, ranges 1-6.
+    // Ledger: one file, hash verified, ranges 1-6, cumulative savings.
     const ledger = ctx.fileMount.ledger(agent)
     expect(ledger.map((f) => f.absPath)).toEqual([normalizeAbsPath(file)])
     expect(ledger[0]!.segments).toEqual([{ start: 1, end: 6 }])
+    expect(ledger[0]!.savedTokens).toBe(6)
 
     
   })

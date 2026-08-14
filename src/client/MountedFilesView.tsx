@@ -18,6 +18,10 @@ export type MountedFilesViewProps = ConvViewProps & PropsLocale<'file-mount'>
 export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
   const nodes = useSession((snapshot) => snapshot.nodes)
   const mounts = useMemo(() => foldMounts(nodes), [nodes])
+  const savedTotal = useMemo(
+    () => mounts.reduce((total, mount) => total + mount.savedTokens, 0),
+    [mounts],
+  )
   if (mounts.length === 0) {
     return (
       <div className={css.root}>
@@ -27,6 +31,9 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
   }
   return (
     <div className={css.root} data-mount-list>
+      <div className={css.summary} data-mount-summary>
+        {t('summary.savedTotal').replace('{n}', String(savedTotal))}
+      </div>
       {mounts.map((mount) => (
         <div key={mount.path} className={css.row} data-mount-row data-mount-kind={mount.mountKind}>
           <div className={css.path} title={mount.path}>{mount.path}</div>
@@ -37,6 +44,7 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
             </span>
             <span className={css.hash} data-mount-hash>{t('list.hash')} {mount.hash.slice(0, 8)}</span>
             <span className={css.lines} data-mount-lines>{mount.totalLines} {t('list.lines')}</span>
+            <span className={css.saved} data-mount-saved>{t('row.saved').replace('{n}', String(mount.savedTokens))}</span>
           </div>
         </div>
       ))}

@@ -15,7 +15,7 @@ export interface Segment {
 }
 
 /** How a mount extended the ledger (observability and fold semantics). */
-export type MountKind = 'new' | 'increment' | 'remount'
+export type MountKind = 'new' | 'increment' | 'remount' | 'dedup'
 
 /** Per-file mounted state kept in memory and folded from injected messages. */
 export interface MountedFile {
@@ -27,6 +27,8 @@ export interface MountedFile {
   totalLines: number
   /** Mounted ranges, normalized ascending. */
   segments: Segment[]
+  /** Cumulative tokens this ledger kept out of the context for this path. */
+  savedTokens: number
 }
 
 /**
@@ -36,6 +38,10 @@ export interface MountedFile {
 export interface MountSource {
   kind: 'plugin'
   plugin: 'file-mount'
+  /** Producer-declared presentation: a collapsed row shows the summary. */
+  form: 'notice'
+  /** One-line account of this mount (row summary and trajectory preview). */
+  summary: string
   /** Normalized absolute path (ledger identity). */
   path: string
   /** sha256 hex of the file content this mount was read from. */
@@ -46,6 +52,8 @@ export interface MountSource {
   mounted: Segment[]
   /** Ranges this message actually adds (normalized, in-window). */
   added: Segment[]
-  /** How the ledger changed: fresh anchor, union, or hash-change remount. */
+  /** How the ledger changed: fresh anchor, union, hash-change remount, or dedup. */
   mountKind: MountKind
+  /** Tokens this decision kept out of the context (0 for new/remount). */
+  savedTokens: number
 }

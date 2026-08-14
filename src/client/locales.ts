@@ -12,6 +12,9 @@ export type FileMountKey =
   | 'kind.new'
   | 'kind.increment'
   | 'kind.remount'
+  | 'kind.dedup'
+  | 'summary.savedTotal'
+  | 'row.saved'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -29,6 +32,9 @@ export const zh: Record<FileMountKey, string> = {
   'kind.new': '新挂载',
   'kind.increment': '增量',
   'kind.remount': '重挂载',
+  'kind.dedup': '去重',
+  'summary.savedTotal': '本次会话累计节省 ≈ {n} tokens',
+  'row.saved': '节省 ≈ {n} tokens',
 }
 
 /** English dictionary. */
@@ -40,4 +46,7 @@ export const en: Record<FileMountKey, string> = {
   'kind.new': 'new',
   'kind.increment': 'increment',
   'kind.remount': 'remount',
+  'kind.dedup': 'dedup',
+  'summary.savedTotal': 'Saved this session ≈ {n} tokens',
+  'row.saved': 'saved ≈ {n} tokens',
 }

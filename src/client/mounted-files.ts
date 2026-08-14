@@ -19,7 +19,9 @@ export interface MountedFileView {
   /** Mounted ranges, normalized ascending. */
   ranges: Segment[]
   /** How the ledger changed last. */
-  mountKind: 'new' | 'increment' | 'remount'
+  mountKind: 'new' | 'increment' | 'remount' | 'dedup'
+  /** Cumulative tokens kept out of the context for this path. */
+  savedTokens: number
   /** Source message seq (stable ordering). */
   seq: number
 }
@@ -47,19 +49,23 @@ export function foldMounts(nodes: readonly ConversationNode[]): MountedFileView[
     if (node.kind !== 'context' || !isRecord(node.source)) continue
     const source = node.source
     if (source['kind'] !== 'plugin' || source['plugin'] !== 'file-mount') continue
-    const { path, hash, totalLines, mounted, mountKind } = source
+    const { path, hash, totalLines, mounted, mountKind, savedTokens } = source
     if (typeof path !== 'string' || path.length === 0
       || typeof hash !== 'string' || hash.length === 0
       || typeof totalLines !== 'number' || !Number.isSafeInteger(totalLines) || totalLines < 1
-      || (mountKind !== 'new' && mountKind !== 'increment' && mountKind !== 'remount')
+      || (mountKind !== 'new' && mountKind !== 'increment' && mountKind !== 'remount' && mountKind !== 'dedup')
       || !Array.isArray(mounted) || mounted.length === 0
       || !mounted.every(isValidSegment)) continue
+    const saved = typeof savedTokens === 'number' && Number.isSafeInteger(savedTokens) && savedTokens >= 0
+      ? savedTokens
+      : 0
     const existing = byPath.get(path)
     if (existing !== undefined && existing.hash === hash) {
       byPath.set(path, {
         ...existing,
         ranges: normalize([...existing.ranges, ...mounted]),
         mountKind,
+        savedTokens: existing.savedTokens + saved,
         seq: node.seq,
       })
     } else {
@@ -69,6 +75,7 @@ export function foldMounts(nodes: readonly ConversationNode[]): MountedFileView[
         totalLines,
         ranges: normalize(mounted),
         mountKind,
+        savedTokens: (existing?.savedTokens ?? 0) + saved,
         seq: node.seq,
       })
     }

@@ -7,7 +7,8 @@ Ported from [piwpi](https://github.com/earendil-works/pi-mono)'s context-mount m
 ## What it does
 
 - **Model side**: already-mounted ranges are never re-sent (dedup marker), new content flows only for the missing ranges (incremental mount), disk changes invalidate and remount (version awareness). Rendering is deterministic, keeping the prompt prefix cache stable.
-- **UI side**: conversation rows show each mount as a foldable file-mount context injection; the trajectory shows the matching context records; the conversation tab ring gains a Mounted Files tab listing path, hash, mounted ranges, and state live.
+- **UI side**: conversation rows show each mount as a foldable file-mount context injection whose summary states the savings (e.g. "saved ≈ 300 tokens"); the trajectory shows the matching context records; the conversation tab ring gains a Mounted Files tab listing path, hash, mounted ranges, and state live, with a session-total savings header.
+- **Savings accounting**: coarse char-count ÷ 4 estimates (dedup = the whole suppressed window, increment = the already-covered part); totals survive file changes and session resume.
 
 ## Install
 
@@ -43,7 +44,7 @@ The plugin sits on the `tools/post-execute` interception point:
 
 1. It derives the read window from the canonical value (path/offset/lines/totalLines).
 2. A stat-verified cache (mtime+size fast path + sha256) confirms the on-disk identity.
-3. Three branches: full coverage replaces the result with a dedup marker; partial coverage replaces it with a short marker and injects the missing ranges through the official post-tool additionalContexts channel; a hash change declares the file changed and remounts the window fresh.
+3. Three branches: full coverage replaces the result with a dedup marker and injects a short "saved ≈ N tokens" note; partial coverage replaces it with a short marker and injects the missing ranges through the official post-tool additionalContexts channel (the source carries the savings); a hash change declares the file changed and remounts the window fresh.
 4. Mount state travels as structured fields on the injected message source (a standard `user/message` event), shared by resume replay and the browser fold.
 
 ## Known limitations
@@ -52,7 +53,6 @@ The plugin sits on the `tools/post-execute` interception point:
 - Increment/dedup/remount replace the result text, so the UI read card degrades to the generic card (the canonical value stays intact).
 - The plugin depends on the read tool's canonical value shape; a shape change trips the guard and passes through natively (pinned by the integration test).
 - Custom session event types cannot persist safely on rc.6 (the load path hard-refuses unknown types), so the ledger rides structured source fields on standard events; this can migrate once DSH opens an external event-type registration surface.
-- Token-savings statistics and notifications are planned for a later iteration, not this one.
 
 ## Development
 
