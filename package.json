@@ -27,7 +27,8 @@
     "build": "tsc && tsdown",
     "prepare": "tsc && tsdown",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepack": "pnpm test && pnpm typecheck"
   },
   "dsh": {
     "bundle": {
