@@ -27,7 +27,7 @@
    - **挂载位置**：由 DSH 的 post-tool additionalContexts 语义决定——注入块在触发它的那次 read 结果之后、本步骤批次结算时追加，紧邻起因（工具调用/结果与挂载正文成组）。不选请求开头（与触发点失联）、不选会话尾部（DSH 无任意位置注入通道，且跨步骤破坏因果）。
    - **位置一经写入即固定**：后续新挂载各挂各的触发点，旧块永不改写/挪动，历史前缀稳定 → provider KV 缓存友好。与 piwpi 的「每次请求重渲染尾部追加」不同：DSH 是「日志即上下文」，写进去即固定，效果等价且机制更简单。
 4. **确定性渲染**。marker 与信封由状态唯一决定，同状态逐字节相同，保证 prompt 前缀缓存稳定。
-5. **持久化与恢复**。会话事件 `file-mount/mounted` / `file-mount/invalidated` 以 `ignorable: true` 写入会话日志（独立插件的事件类型不进入 DSH 生成的 KNOWN_SESSION_EVENT_TYPES，ignorable 标记让 DSH 自身重建安全跳过、本插件自读自解释——已核实写路径 envelope 校验开放、history RPC 不过滤事件类型）；`agent/session-start`(resume) 触发重放，post-execute 首次访问 lazy await 防竞态。Plan B：若实测跨进程读回路径拒绝，退回 storage-domain（JSON）+ Remote 端点。文件缓存照搬 piwpi stat 校验式设计（mtime+size 快路径、TTL 安全阀、挂载中 pin）。
+5. **持久化与恢复（已定稿）**。挂载账本的持久载体 = 注入消息的 **source 结构化字段**（标准 `user/message` 事件上的 merge-extensible JSON：path/hash/totalLines/mounted/added/mountKind）。**不用自定义会话事件**：实测 rc.6 的 `Session.append` 无法打 `ignorable` 标记，而持久化加载对未知事件类型硬性拒绝整个日志（SessionFormatUnsupportedError）——已验证并据此改设计。`agent/session-start`(resume) 触发重放 + post-execute 首次访问 lazy await 防竞态；jsonl 持久化往返测试已钉死该保证。文件缓存照搬 piwpi stat 校验式设计（mtime+size 快路径、TTL 安全阀、挂载中 pin）。未来 DSH 开放外部事件类型注册面后可迁移到专用事件类型。
 6. **前台展示（DSH 风格三处落地）**：
    - **轨迹页**：挂载注入自动成为 trajectory 的 context 记录（provenance 显示 file-mount，预览显示挂载块），零额外代码；
    - **对话上下文**：每次挂载自动渲染为 ContextInjectionRow（DisclosureRow 折叠行：「上下文注入 · file-mount · 摘要」，展开即挂载正文），零额外代码；
