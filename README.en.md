@@ -43,10 +43,11 @@ The plugin sits on the `tools/post-execute` interception point:
 2. A stat-verified cache (mtime+size fast path + sha256) confirms the on-disk identity.
 3. Three branches: full coverage replaces the result with a dedup marker and injects a short "saved ≈ N tokens" note; partial coverage replaces it with a short marker and injects the missing ranges through the official post-tool additionalContexts channel (the source carries the savings); a hash change declares the file changed and remounts the window fresh.
 4. Mount state travels as structured fields on the injected message source (a standard `user/message` event), shared by resume replay and the browser fold.
+5. Compaction awareness: the canonical compaction checkpoint (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) marks shadowed mounts, which are dropped from the ledger (live tail sweep + replay skip) so content that left the context is never deduped.
 
 ## Known limitations
 
-- Compaction breaks the mounted guarantee: DSH has not opened compaction to the interception surface, so the plugin clears its ledger when a session rebuilds after compaction and recovers naturally on the next reads.
+- Compaction voids the mounted guarantee: DSH replaces the old surface range with a checkpoint, so the replaced mount content leaves the model context. The plugin reads the checkpoint's `sourceEventSeqs` to recognize shadowed mounts — a live tail sweep on every read plus shadow-skipping replay prevent resurrection — and re-anchors on the next read, never deduping content that is no longer in context. Mount state cannot be folded into the summary itself, so post-compaction remounts cost tokens again.
 - Increment/dedup/remount replace the result text, so the UI read card degrades to the generic card (the canonical value stays intact).
 - The plugin depends on the read tool's canonical value shape; a shape change trips the guard and passes through natively (pinned by the integration test).
 - Custom session event types cannot persist safely on rc.6 (the load path hard-refuses unknown types), so the ledger rides structured source fields on standard events; this can migrate once DSH opens an external event-type registration surface.

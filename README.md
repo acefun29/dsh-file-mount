@@ -42,11 +42,12 @@ npx @deepseek-ai/dsh --profile web
 1. 以 read 工具返回的 canonical value（path/offset/lines/totalLines）为准确定本次窗口；
 2. 经 stat 校验式缓存（mtime+size 快路径 + sha256）核实磁盘身份；
 3. 三分支决策：完全覆盖 → 结果换成去重 marker 并注入一条「saved ≈ N tokens」笔记消息；部分覆盖 → 结果换成短 marker + 经官方 additionalContexts 通道注入缺失区间（source 携带节省量）；hash 变化 → 声明文件已变更并整体重挂；
-4. 挂载状态结构化写入注入消息的 source（标准 `user/message` 事件），恢复重放与浏览器折叠共用同一载体。
+4. 挂载状态结构化写入注入消息的 source（标准 `user/message` 事件），恢复重放与浏览器折叠共用同一载体；
+5. 压缩感知：识别 DSH 标准压缩 checkpoint（source `{kind:'plugin', plugin:'compact'}` 的 `sourceEventSeqs`），被 shadow 的挂载消息不再计入账本（在线增量扫描 + 恢复重放跳过），保证不去重已离开上下文的内容。
 
 ## 已知限制
 
-- compaction 后「已挂载」保证失效：DSH 尚未把压缩纳入拦截面，插件在会话压缩重建时清空账本，重新挂载从下一轮读取自然恢复。
+- compaction 后「已挂载」保证失效：DSH 在会话 surface 层用 checkpoint 替换旧区间，被替换的挂载内容随之离开模型上下文。插件从 checkpoint 事件的 `sourceEventSeqs` 识别被 shadow 的挂载消息——在线扫描（每次读取增量检查日志尾部）与恢复重放（跳过 shadow 消息）双路防复活——下一次读取自然重新锚定，绝不去重「已不在上下文」的内容。挂载状态本身无法写入压缩摘要，压缩后重新挂载需重新计入 token。
 - 增量 / 去重 / 重挂载替换了结果文本，UI 的 read 卡片降级为通用卡片（canonical value 完整保留）。
 - 依赖 read 工具 canonical value 的结构；结构变化时守卫失效并原生透传（集成测试锁定该结构）。
 - 自定义会话事件类型在 rc.6 无法安全持久化（加载路径硬性拒绝未知类型），故账本载体选用标准事件上的结构化 source；DSH 开放外部事件类型注册面后可迁移。
@@ -55,7 +56,7 @@ npx @deepseek-ai/dsh --profile web
 
 ```sh
 pnpm install
-pnpm test        # vitest（67 用例：单元 + 真实 read 循环集成 + 持久化往返 + 客户端组件）
+pnpm test        # vitest（74 用例：单元 + 真实 read 循环集成 + 持久化往返 + 压缩感知 + 客户端组件）
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown（lib/index.js / lib/invariant.js / lib/client.js）
 ```

@@ -179,6 +179,72 @@ describe('file-mount integration', () => {
     
   })
 
+  it('re-anchors when a compact checkpoint shadows the mounts (live sweep)', async () => {
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 2 }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: file, offset: 1, limit: 2 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = ctx.agentLoop.create(SessionId('it-compact-live'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    // The anchor's state message is now shadowed by a compaction checkpoint.
+    const mountEvent = agent.session.events.find((event) => event.type === 'user/message'
+      && (event.data.source as unknown as Record<string, unknown> | null)?.['plugin'] === 'file-mount')
+    expect(mountEvent).toBeDefined()
+    agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: '[compact checkpoint]' }],
+      source: { kind: 'plugin', plugin: 'compact' },
+    }), { surfaceOp: 'append', sourceEventSeqs: [mountEvent!.seq] })
+
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+
+    // The claim is void: c2 re-anchors natively instead of deduping.
+    expect(resultText(agent, 'c2')).toContain('<content>')
+    expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new', 'new'])
+    expect(ctx.fileMount.ledger(agent)[0]?.segments).toEqual([{ start: 1, end: 2 }])
+  })
+
+  it('does not resurrect mounts shadowed by a checkpoint on replay', async () => {
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 2 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = ctx.agentLoop.create(SessionId('it-compact-replay'), { provider: 'mock', model: 'mock' })
+
+    // Seed a resumed-style mount message, then a checkpoint that shadows it.
+    const seed = createUserMessage({
+      content: [{ type: 'text', text: '[file-mount: seed]' }],
+      source: {
+        kind: 'plugin',
+        plugin: 'file-mount',
+        path: normalizeAbsPath(file),
+        hash: hashBuffer(await readFile(file)),
+        totalLines: 6,
+        mounted: [{ start: 1, end: 2 }],
+        added: [{ start: 1, end: 2 }],
+        mountKind: 'new',
+      },
+    })
+    const seedEvent = agent.session.append('user/message', seed, { surfaceOp: 'append' })
+    agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: '[compact checkpoint]' }],
+      source: { kind: 'plugin', plugin: 'compact' },
+    }), { surfaceOp: 'append', sourceEventSeqs: [seedEvent.seq] })
+
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    // The shadowed seed must not count: the first read anchors natively.
+    expect(resultText(agent, 'c1')).toContain('<content>')
+    expect(ctx.fileMount.ledger(agent)[0]?.segments).toEqual([{ start: 1, end: 2 }])
+  })
+
   it('survives a jsonl persistence round trip (standard user/message carrier)', async () => {
     const root = join(dir, 'persist')
     const sessionId = SessionId('it-persist')

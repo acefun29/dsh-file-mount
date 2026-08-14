@@ -14,6 +14,10 @@
  * merge-extensible JSON on a standard `user/message` event), so resumed
  * sessions and the browser client fold state from persistence-safe events.
  *
+ * Compaction-aware: mount messages shadowed by a compact checkpoint no longer
+ * count as mounted (their content has left the model context) — both when the
+ * live log gains a checkpoint and when a resumed session replays the log.
+ *
  * @module dsh-file-mount
  */
 import type { Context } from '@deepseek-ai/cordis'
@@ -23,6 +27,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { PostToolDecision, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-session/types'
+import { isCompactCheckpoint, shadowedSeqsOf } from './compaction.ts'
 import { FileContentCache } from './file-cache.ts'
 import { normalizeAbsPath } from './paths.ts'
 import { subtract, type LineRange } from './ranges.ts'
@@ -33,7 +38,7 @@ import {
   renderMountBlock,
   renderRemountMarker,
 } from './render.ts'
-import { MountStore } from './store.ts'
+import { MountStore, type LedgerRecord } from './store.ts'
 import { estimateRangeTokens } from './tokens.ts'
 import type { MountKind, MountedFile, MountSource, Segment } from './types.ts'
 
@@ -114,6 +119,8 @@ export class FileMountService extends Service {
   private readonly cache: FileContentCache
   private readonly stores = new Map<string, MountStore>()
   private readonly restores = new Map<string, Promise<void>>()
+  /** Log length each agent's ledger has folded up to (live checkpoint sweep). */
+  private readonly cursors = new Map<string, number>()
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'fileMount')
@@ -126,6 +133,9 @@ export class FileMountService extends Service {
 
     ctx.on('agent/session-start', ({ agent, source }) => {
       if (source === 'resume') void this.kickoffRestore(agent)
+      // 'clear'/'compact' are declared in DSH's SessionStartSource union but not
+      // yet emitted by any harness code — defensive wiring until they are. The
+      // live checkpoint sweep (storeFor) covers compaction today.
       if (source === 'clear' || source === 'compact') this.resetLedger(agent)
     })
 
@@ -289,7 +299,10 @@ export class FileMountService extends Service {
   private storeFor(agent: Agent): Promise<MountStore> {
     const id = agent.id
     const existing = this.stores.get(id)
-    if (existing !== undefined) return Promise.resolve(existing)
+    if (existing !== undefined) {
+      this.sweep(agent, existing)
+      return Promise.resolve(existing)
+    }
     const pending = this.restores.get(id) ?? this.kickoffRestore(agent)
     return pending.then(() => {
       let store = this.stores.get(id)
@@ -297,8 +310,55 @@ export class FileMountService extends Service {
         store = new MountStore()
         this.stores.set(id, store)
       }
+      this.sweep(agent, store)
       return store
     })
+  }
+
+  /**
+   * Mount records whose claims still hold: file-mount messages that no compact
+   * checkpoint shadows. Shadowed messages stay in the raw log, but their
+   * content has left the model context, so folding them would resurrect
+   * stale claims (and enable false dedup).
+   */
+  private visibleMountRecords(agent: Agent): LedgerRecord[] {
+    const events = agent.session.events
+    const shadowed = shadowedSeqsOf(events)
+    return events
+      .filter((event) => event.type === 'user/message')
+      .filter((event) => !shadowed.has(event.seq))
+      .map((event) => ({ type: event.type, source: event.data.source }))
+  }
+
+  /**
+   * Fold the live log tail for new compact checkpoints (DSH does not emit a
+   * session-start 'compact' notification yet). Any new checkpoint — or a
+   * replaced/shrunk log — re-derives the ledger from the still-visible mount
+   * messages, so a claim never outlives the content it cites.
+   */
+  private sweep(agent: Agent, store: MountStore): void {
+    const events = agent.session.events
+    const cursor = this.cursors.get(agent.id)
+    const start = cursor === undefined || cursor > events.length ? 0 : cursor
+    let dirty = cursor !== undefined && cursor > events.length
+    if (!dirty) {
+      for (let i = start; i < events.length; i++) {
+        if (isCompactCheckpoint(events[i])) {
+          dirty = true
+          break
+        }
+      }
+    }
+    this.cursors.set(agent.id, events.length)
+    if (dirty) this.refold(agent, store)
+  }
+
+  /** Re-derive the ledger from the still-visible mount messages. */
+  private refold(agent: Agent, store: MountStore): void {
+    for (const file of store.all()) this.cache.unpin(file.absPath)
+    store.clear()
+    store.replay(this.visibleMountRecords(agent))
+    for (const file of store.all()) this.cache.pin(file.absPath)
   }
 
   /** Replay the ledger from plugin-injected message sources in the live log. */
@@ -307,10 +367,9 @@ export class FileMountService extends Service {
     if (existing !== undefined) return existing
     const pending = (async () => {
       const store = new MountStore()
-      store.replay(agent.session.events
-        .filter((event) => event.type === 'user/message')
-        .map((event) => ({ type: event.type, source: event.data.source })))
+      store.replay(this.visibleMountRecords(agent))
       this.stores.set(agent.id, store)
+      this.cursors.set(agent.id, agent.session.events.length)
     })().finally(() => { this.restores.delete(agent.id) })
     this.restores.set(agent.id, pending)
     return pending
