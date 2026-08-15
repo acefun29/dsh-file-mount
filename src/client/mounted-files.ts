@@ -51,6 +51,46 @@ export interface MountedFileView {
 export type FreshnessLevel = 'fresh' | 'ok' | 'warn' | 'expired' | 'unknown'
 
 /**
+ * Preset freshness thresholds the dashboard tier picker offers (drift past
+ * the threshold counts a segment as expired; higher = more lenient).
+ */
+export const FRESHNESS_TIERS = [
+  { id: 'lenient', threshold: 0.95 },
+  { id: 'standard', threshold: 0.85 },
+  { id: 'sensitive', threshold: 0.7 },
+  { id: 'aggressive', threshold: 0.5 },
+] as const
+
+/** Tier ids, in picker order. */
+export type FreshnessTierId = (typeof FRESHNESS_TIERS)[number]['id']
+
+/** The threshold of one tier id. */
+export function tierOf(id: FreshnessTierId): number {
+  const tier = FRESHNESS_TIERS.find((candidate) => candidate.id === id)
+  if (tier === undefined) throw new Error(`unknown freshness tier: ${id}`)
+  return tier.threshold
+}
+
+/** The tier whose threshold is closest to the given value (ties → earlier). */
+export function nearestTier(threshold: number): FreshnessTierId {
+  let best: (typeof FRESHNESS_TIERS)[number] = FRESHNESS_TIERS[1]!
+  let bestDistance = Infinity
+  for (const tier of FRESHNESS_TIERS) {
+    const distance = Math.abs(tier.threshold - threshold)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = tier
+    }
+  }
+  return best.id
+}
+
+/** The host settings face the dashboard tier picker writes through (duck-typed; only the fields the panel uses). */
+export interface FreshnessSettingsApi {
+  update(payload: { ns: string; patch: { freshnessThreshold: number } }): Promise<unknown>
+}
+
+/**
  * Freshness level from the attention-decay drift model: r = (L - born) / L
  * is how far the segment has drifted from the context tail (fresh = tail
  * attention zone, > threshold = pushed past the head zone = expired).
