@@ -1,10 +1,10 @@
 /** Mounted-files dashboard: progress bars, search, sort, net savings + a rough
  * CNY figure (plan items 16 + 17), matching the DSH tab styling. */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import { foldMounts, freshnessLevel } from './mounted-files.ts'
+import { MountFold, freshnessLevel } from './mounted-files.ts'
 import { formatRange } from '../render.ts'
 import css from './MountedFilesView.module.css'
 
@@ -31,15 +31,22 @@ function levelKey(level: keyof typeof LEVEL_KEYS) {
 }
 
 /**
- * Pure reader over the conversation snapshot: fold the injected mount
- * messages once per snapshot revision, then render one dashboard row per
- * file with a progress bar, search, and sorting.
+ * Dashboard over the conversation snapshot: fold the injected mount messages
+ * through a persistent {@link MountFold} (one per view instance), so mounts
+ * whose messages scroll out of the client's paginated history window stay on
+ * the dashboard, then render one row per file with a progress bar, search,
+ * and sorting. The fold resets when the conversation (sessionId) changes.
  * @param props - slot standard kit (useSession) plus the view locale seat.
  * @returns the mounted-files dashboard, or the localized empty hint.
  */
 export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
+  const sessionId = useSession((snapshot) => snapshot.sessionId)
   const nodes = useSession((snapshot) => snapshot.nodes)
-  const mounts = useMemo(() => foldMounts(nodes), [nodes])
+  const foldRef = useRef<MountFold | undefined>(undefined)
+  const mounts = useMemo(() => {
+    const fold = foldRef.current ?? (foldRef.current = new MountFold())
+    return fold.fold(sessionId, nodes)
+  }, [sessionId, nodes])
   const [query, setQuery] = useState('')
   const [sortBy, setSortBy] = useState<'net' | 'path'>('net')
   // Freshness segment rows are expanded by default; clicking collapses one file.
