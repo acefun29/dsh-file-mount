@@ -64,7 +64,7 @@ export function textResponse(text: string): StreamChunk[] {
   ]
 }
 
-export function toolCallResponse(rawCallId: string, name: string, args: object): StreamChunk[] {
+export function toolCallResponse(rawCallId: string, name: string, args: object, usageInputTokens = 10): StreamChunk[] {
   const callId = CallId(rawCallId)
   const argumentsJson = JSON.stringify(args)
   return [
@@ -72,7 +72,7 @@ export function toolCallResponse(rawCallId: string, name: string, args: object):
     { type: 'tool-call-delta', index: 0, id: callId, name, argumentsDelta: argumentsJson.slice(0, 5) },
     { type: 'tool-call-delta', index: 0, id: callId, argumentsDelta: argumentsJson.slice(5) },
     { type: 'block-end', index: 0, block: { type: 'tool-call', id: callId, name, arguments: argumentsJson } },
-    { type: 'usage', usage: { inputTokens: 10, outputTokens: 5 } },
+    { type: 'usage', usage: { inputTokens: usageInputTokens, outputTokens: 5 } },
     { type: 'finish', reason: { kind: 'tool-calls' } },
   ]
 }

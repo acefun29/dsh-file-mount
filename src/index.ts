@@ -33,7 +33,7 @@ import { diffLines, diffStats, remapSegments } from './diff.ts'
 import { matchesAnyGlob } from './glob.ts'
 import { FileContentCache } from './file-cache.ts'
 import { readFile, rename, writeFile } from 'node:fs/promises'
-import { normalizeLedger } from './mount-source.ts'
+import { inheritHistory, normalizeLedger, pruneExpired } from './mount-source.ts'
 import { normalizeAbsPath } from './paths.ts'
 import { normalize, subtract, type LineRange } from './ranges.ts'
 import {
@@ -81,6 +81,10 @@ export interface Config {
   maxManagedBytes?: number
   /** Optional path of the cross-session stats file (plan item 24). */
   statsFile?: string
+  /** Freshness tracking (attention-decay plan): segments drift from the context tail. */
+  freshnessEnabled?: boolean
+  /** Drift ratio past which a segment counts as expired (0..1, 0.85 = top 15%). */
+  freshnessThreshold?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -93,6 +97,8 @@ export const Config: z<Config> = z.object({
   excludeGlobs: z.array(z.string()).default([]),
   maxManagedBytes: z.number().step(1).min(1).default(16 * 1024 * 1024),
   statsFile: z.string(),
+  freshnessEnabled: z.boolean().default(true),
+  freshnessThreshold: z.number().step(0.01).min(0).max(1).default(0.85),
 })
 
 export const name = 'file-mount'
@@ -164,6 +170,8 @@ export class FileMountService extends Service {
   private readonly contextL = new Map<string, number>()
   private readonly excludeGlobs: readonly string[]
   private readonly statsFile: string | undefined
+  private readonly freshnessEnabled: boolean
+  private readonly freshnessThreshold: number
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'fileMount')
@@ -173,6 +181,8 @@ export class FileMountService extends Service {
     this.minSavedTokens = resolved.minSavedTokens ?? 16
     this.excludeGlobs = resolved.excludeGlobs ?? []
     this.statsFile = resolved.statsFile
+    this.freshnessEnabled = resolved.freshnessEnabled ?? true
+    this.freshnessThreshold = resolved.freshnessThreshold ?? 0.85
     this.cache = new FileContentCache({
       ...resolved.capacity !== undefined ? { capacity: resolved.capacity } : {},
       ...resolved.ttlMs !== undefined ? { ttlMs: resolved.ttlMs } : {},
@@ -310,8 +320,6 @@ export class FileMountService extends Service {
     this.cache.invalidate(normalizeAbsPath(path))
   }
 
-
-
   /** Take (and clear) the silent-dedup savings pending for a session+file, so
    * they ride the next real message and resume reconstruction stays exact. */
   private takePendingSaved(agentId: string, absPath: string): number {
@@ -440,11 +448,10 @@ export class FileMountService extends Service {
         }
       }
       const missing = subtract(baseMounted, want)
-      const postMounted = normalize([...baseMounted, ...missing])
       const block = renderMountBlock({
         path: value.path,
         hash: entry.hash,
-        mounted: postMounted,
+        mounted: normalize([...baseMounted, ...missing]),
         windowStart,
         lines,
         missing,
@@ -453,8 +460,12 @@ export class FileMountService extends Service {
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
       const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
       const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
+      // Fresh born metadata on the re-sent ranges; history (expired counts)
+      // survives the hash change and is inherited by overlapping re-mounts.
       const fresh = this.stampBorn(agent.id, block, missing)
-      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, normalizeLedger([...baseMounted, ...fresh]), savedTokens, spentTokens)
+      const inherited = inheritHistory(fresh, existing.expiredHistory)
+      const postMounted = normalizeLedger([...baseMounted, ...inherited.segments])
+      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
       const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'remount', savedTokens, spentTokens)
       if (downstream.value !== undefined) return downstream
       return {
@@ -465,7 +476,17 @@ export class FileMountService extends Service {
     }
 
     // Unchanged file: dedup (full coverage) or increment (missing ranges only).
-    const mounted = existing.segments
+    // Freshness (attention-decay plan): lazily drop expired segments BEFORE any
+    // dedup decision — expired content stops deduping (the next read re-sends
+    // it) and its count moves into the per-file history, which the re-mount
+    // inherits. No timers: this check only runs on reads.
+    let history = existing.expiredHistory
+    let mounted = existing.segments
+    if (this.freshnessEnabled) {
+      const pruned = pruneExpired(mounted, this.contextL.get(agent.id), this.freshnessThreshold)
+      mounted = pruned.active
+      history = [...history, ...pruned.history]
+    }
     const missing = subtract(mounted, want)
     if (missing.length === 0) {
       // Full coverage: the window adds nothing. Replace the result with the
@@ -486,7 +507,7 @@ export class FileMountService extends Service {
         perAgent.set(absPath, 0)
         const noteText = `${markerHead(value.path, entry.hash, mounted)} - already mounted, saved ≈ ${savedTokens} tokens`
         const spentTokens = estimateTokens(noteText)
-        store.mount({ absPath, hash: entry.hash, totalLines: value.totalLines, segments: [], savedTokens, spentTokens, expiredHistory: existing.expiredHistory })
+        store.mount({ absPath, hash: entry.hash, totalLines: value.totalLines, segments: [], savedTokens, spentTokens, expiredHistory: history })
         const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [], 'dedup', savedTokens, spentTokens)
         return {
           kind: 'accept',
@@ -506,11 +527,10 @@ export class FileMountService extends Service {
         additionalContexts: [...downstream.additionalContexts ?? []],
       }
     }
-    const postMounted = normalize([...mounted, ...missing])
     const block = renderMountBlock({
       path: value.path,
       hash: entry.hash,
-      mounted: postMounted,
+      mounted: normalize([...mounted, ...missing]),
       windowStart,
       lines,
       missing,
@@ -520,7 +540,9 @@ export class FileMountService extends Service {
     const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
     const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
     const fresh = this.stampBorn(agent.id, block, missing)
-    this.mount(store, agent.id, absPath, entry.hash, value.totalLines, normalizeLedger([...mounted, ...fresh]), savedTokens, spentTokens)
+    const inherited = inheritHistory(fresh, history)
+    const postMounted = normalizeLedger([...mounted, ...inherited.segments])
+    this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
     const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment', savedTokens, spentTokens)
     const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
     if (downstream.value !== undefined) return downstream
@@ -555,6 +577,7 @@ export class FileMountService extends Service {
       mountKind,
       savedTokens,
       spentTokens,
+      freshnessThreshold: this.freshnessThreshold,
     }
   }
 

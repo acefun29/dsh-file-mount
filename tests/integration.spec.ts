@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { CallId, createUserMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import SessionStore from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -19,6 +19,16 @@ import { hashBuffer } from '../src/hash.ts'
 import { normalizeAbsPath } from '../src/paths.ts'
 import { harness, MockAdapter, textResponse, toolCallResponse, waitForIdle } from './harness.ts'
 
+/** Text chunks with a controllable input-token usage (freshness clock). */
+function textWithUsage(text: string, inputTokens: number): StreamChunk[] {
+  return [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    ...Array.from(text, (char): StreamChunk => ({ type: 'text-delta', index: 0, text: char })),
+    { type: 'block-end', index: 0, block: { type: 'text', text } },
+    { type: 'usage', usage: { inputTokens, outputTokens: text.length } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]
+}
 function send(agent: Agent, text: string): void {
   agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
 }
@@ -482,5 +492,45 @@ describe('file-mount integration', () => {
     const stats = JSON.parse(raw) as { sessions: number; savedTokens: number }
     expect(stats.sessions).toBe(1)
     expect(stats.savedTokens).toBe(40)
+  })
+
+  it('expired segments leave the ledger, re-send on the next read, and keep their count (freshness)', async () => {
+    const subject = join(dir, 'freshness.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      textWithUsage('hi', 100),
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }, 110),
+      textWithUsage('ok', 150),
+      textWithUsage('grow', 300),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 310),
+      textWithUsage('done', 350),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { freshnessThreshold: 0.3 } })
+    const agent = ctx.agentLoop.create(SessionId('it-freshness'), { provider: 'mock', model: 'mock' })
+    send(agent, 'hello')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    send(agent, 'grow context')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    // Same-hash expiry: the re-send lands as an increment (not a remount).
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'increment'])
+    // The fresh mount stamped a born position (context was 110 tokens).
+    const first = sources[0]!['mounted'] as { start: number; end: number; born?: number; expired: number }[]
+    expect(first[0]!.born).toBeGreaterThan(110)
+    expect(first[0]!.expired).toBe(0)
+    // After the context grew past the threshold, the whole window expired and
+    // was re-sent; the re-mount inherits expired count 1 and a new born.
+    const second = sources[1]!['mounted'] as { start: number; end: number; born?: number; expired: number }[]
+    expect(geo(second)).toEqual([{ start: 1, end: 3 }])
+    expect(second[0]!.expired).toBe(1)
+    expect(second[0]!.born).toBeGreaterThan(310)
+    expect(resultText(agent, 'c2')).toContain('+L1-3 - range added to context')
   })
 })
