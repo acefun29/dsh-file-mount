@@ -36,7 +36,7 @@ function nonNegative(value: unknown): number {
 }
 
 /** Saturating addition: the token counters never overflow the safe-int range. */
-function saturatingAdd(a: number, b: number): number {
+export function saturatingAdd(a: number, b: number): number {
   const sum = a + b
   return sum > Number.MAX_SAFE_INTEGER ? Number.MAX_SAFE_INTEGER : sum
 }

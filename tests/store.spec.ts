@@ -113,6 +113,49 @@ describe('MountStore', () => {
     expect(store.get('a.ts')!.spentTokens).toBe(15)
   })
 
+  it('replaces active segments and updates expiredHistory without unioning old segments back', () => {
+    const store = new MountStore()
+    store.mount({
+      absPath: 'a.ts',
+      hash: 'h1',
+      totalLines: 100,
+      segments: [
+        { start: 1, end: 50, born: 100, tokens: 50, expired: 0 },
+        { start: 51, end: 100, born: 500, tokens: 50, expired: 0 },
+      ],
+      savedTokens: 0,
+      spentTokens: 0,
+      expiredHistory: [],
+    })
+
+    // Prune second segment and replace
+    store.replaceSegments(
+      'a.ts',
+      [{ start: 1, end: 50, born: 100, tokens: 50, expired: 0 }],
+      [{ start: 51, end: 100, expired: 1 }],
+      20,
+      5,
+    )
+
+    const entry = store.get('a.ts')!
+    expect(entry.segments).toEqual([{ start: 1, end: 50, born: 100, tokens: 50, expired: 0 }])
+    expect(entry.expiredHistory).toEqual([{ start: 51, end: 100, expired: 1 }])
+    expect(entry.savedTokens).toBe(20)
+    expect(entry.spentTokens).toBe(5)
+  })
+
+  it('replays and mounts segments carrying tokens', () => {
+    const store = new MountStore()
+    store.replay([
+      mountRecord(mountSource({
+        mounted: [{ start: 1, end: 50, born: 200, tokens: 80, expired: 0 }],
+      })),
+    ])
+    expect(store.get('a.ts')!.segments).toEqual([
+      { start: 1, end: 50, born: 200, tokens: 80, expired: 0 },
+    ])
+  })
+
   it('clear empties the ledger', () => {
     const store = new MountStore()
     store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 10, segments: [{ start: 1, end: 10 }], savedTokens: 0 , expiredHistory: [] })
