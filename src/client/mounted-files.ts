@@ -104,7 +104,7 @@ export interface FreshnessSettingsApi {
 export function freshnessLevel(
   born: number | undefined,
   contextL: number | undefined,
-  threshold = DEFAULT_FRESHNESS_CONFIG.threshold,
+  threshold: number = DEFAULT_FRESHNESS_CONFIG.threshold,
   tokens?: number,
   options?: FreshnessOptions,
 ): FreshnessLevel {
@@ -156,7 +156,7 @@ export class MountFold {
   private sessionId: string | undefined
   private readonly paths = new Map<string, StoredMount[]>()
   private readonly folded = new Set<number>()
-  private lastThreshold = DEFAULT_FRESHNESS_CONFIG.threshold
+  private lastThreshold: number = DEFAULT_FRESHNESS_CONFIG.threshold
   private lastThresholdSeq = -1
   /**
    * Fold one snapshot revision (ascending seq) into the persistent state.
