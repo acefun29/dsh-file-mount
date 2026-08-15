@@ -33,6 +33,7 @@ import { diffLines, diffStats, remapSegments } from './diff.ts'
 import { matchesAnyGlob } from './glob.ts'
 import { FileContentCache } from './file-cache.ts'
 import { readFile, rename, writeFile } from 'node:fs/promises'
+import { normalizeLedger } from './mount-source.ts'
 import { normalizeAbsPath } from './paths.ts'
 import { normalize, subtract, type LineRange } from './ranges.ts'
 import {
@@ -159,6 +160,8 @@ export class FileMountService extends Service {
   private compatWarned = false
   /** Per-session silent-dedup savings waiting to ride the next real message. */
   private readonly pendingDedup = new Map<string, Map<string, number>>()
+  /** Per-session current context length (latest request input tokens, from usage). */
+  private readonly contextL = new Map<string, number>()
   private readonly excludeGlobs: readonly string[]
   private readonly statsFile: string | undefined
 
@@ -285,7 +288,8 @@ export class FileMountService extends Service {
       const want: LineRange = { start: 1, end: entry.lineCount }
       const head = markerHead(path, entry.hash, [want])
       const spentTokens = estimateTokens(head)
-      this.mount(store, agent.id, absPath, entry.hash, entry.lineCount, [want].map((s) => ({ ...s, expired: 0 })), 0, spentTokens)
+      const fresh = this.stampBorn(agent.id, head, [want])
+      this.mount(store, agent.id, absPath, entry.hash, entry.lineCount, fresh, 0, spentTokens)
       return {
         kind: 'accept',
         additionalContexts: [
@@ -398,7 +402,8 @@ export class FileMountService extends Service {
       const head = markerHead(value.path, entry.hash, [want])
       const spentTokens = estimateTokens(head)
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
-      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, [want].map((s) => ({ ...s, expired: 0 })), pendingSaved, spentTokens)
+      const fresh = this.stampBorn(agent.id, head, [want])
+      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, fresh, pendingSaved, spentTokens)
       if (downstream.value !== undefined) return downstream
       return {
         kind: 'accept',
@@ -448,7 +453,8 @@ export class FileMountService extends Service {
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
       const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
       const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
-      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted.map((s) => ({ ...s, expired: 0 })), savedTokens, spentTokens)
+      const fresh = this.stampBorn(agent.id, block, missing)
+      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, normalizeLedger([...baseMounted, ...fresh]), savedTokens, spentTokens)
       const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'remount', savedTokens, spentTokens)
       if (downstream.value !== undefined) return downstream
       return {
@@ -513,7 +519,8 @@ export class FileMountService extends Service {
     const pendingSaved = this.takePendingSaved(agent.id, absPath)
     const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
     const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
-    this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted.map((s) => ({ ...s, expired: 0 })), savedTokens, spentTokens)
+    const fresh = this.stampBorn(agent.id, block, missing)
+    this.mount(store, agent.id, absPath, entry.hash, value.totalLines, normalizeLedger([...mounted, ...fresh]), savedTokens, spentTokens)
     const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment', savedTokens, spentTokens)
     const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
     if (downstream.value !== undefined) return downstream
@@ -574,6 +581,25 @@ export class FileMountService extends Service {
     this.pinFor(agentId, absPath)
   }
 
+  /** Context position (input tokens) a fresh mount will occupy: the last
+   * request's total plus this block's estimate. Undefined when the session has
+   * no usage data (the segment then renders as unknown freshness). */
+  private bornAt(agentId: string, block: string): number | undefined {
+    const contextLength = this.contextL.get(agentId)
+    return contextLength === undefined ? undefined : contextLength + estimateTokens(block)
+  }
+
+  /** Stamp fresh-born metadata on newly mounted ranges (same mount position). */
+  private stampBorn(agentId: string, block: string, ranges: readonly LineRange[]): LedgerSegment[] {
+    const born = this.bornAt(agentId, block)
+    return ranges.map((range) => ({
+      start: range.start,
+      end: range.end,
+      ...born !== undefined ? { born } : {},
+      expired: 0,
+    }))
+  }
+
   /** Pin a mounted file for one session, honoring the per-session cap (LRU). */
   private pinFor(agentId: string, absPath: string): void {
     let order = this.pinOrders.get(agentId)
@@ -608,6 +634,7 @@ export class FileMountService extends Service {
     this.cursors.delete(id)
     this.restores.delete(id)
     this.pendingDedup.delete(id)
+    this.contextL.delete(id)
     if (store !== undefined) void this.persistStats(store)
   }
 
@@ -673,16 +700,30 @@ export class FileMountService extends Service {
     const cursor = this.cursors.get(agent.id)
     const start = cursor === undefined || cursor > events.length ? 0 : cursor
     let dirty = cursor !== undefined && cursor > events.length
-    if (!dirty) {
-      for (let i = start; i < events.length; i++) {
-        if (isCompactCheckpoint(events[i])) {
-          dirty = true
-          break
-        }
-      }
+    // One tail pass: detect compaction checkpoints AND track the session's
+    // current context length (latest request input tokens) for freshness.
+    for (let i = start; i < events.length; i++) {
+      const event = events[i]
+      if (!dirty && isCompactCheckpoint(event)) dirty = true
+      this.trackContextLength(agent.id, event)
     }
     this.cursors.set(agent.id, events.length)
     if (dirty) this.refold(agent, store)
+  }
+
+  /** Update the per-session context length from one assistant/message usage. */
+  private trackContextLength(agentId: string, event: unknown): void {
+    if (typeof event !== 'object' || event === null) return
+    const record = event as Record<string, unknown>
+    if (record['type'] !== 'assistant/message') return
+    const data = record['data']
+    if (typeof data !== 'object' || data === null) return
+    const usage = (data as Record<string, unknown>)['usage']
+    if (typeof usage !== 'object' || usage === null) return
+    const inputTokens = (usage as Record<string, unknown>)['inputTokens']
+    if (typeof inputTokens === 'number' && Number.isFinite(inputTokens) && inputTokens >= 0) {
+      this.contextL.set(agentId, inputTokens)
+    }
   }
 
   /** Re-derive the ledger from the still-visible mount messages. */
@@ -707,6 +748,9 @@ export class FileMountService extends Service {
       }
       this.stores.set(agent.id, store)
       this.cursors.set(agent.id, agent.session.events.length)
+      // A resumed session must rebuild its context length from the full log
+      // (the sweep cursor is already at the end, so this is the one full pass).
+      for (const event of agent.session.events) this.trackContextLength(agent.id, event)
       this.resyncPins(agent.id, store)
     })().finally(() => { this.restores.delete(agent.id) })
     this.restores.set(agent.id, pending)
@@ -720,6 +764,7 @@ export class FileMountService extends Service {
     this.cache.unpinAll(agent.id)
     this.pinOrders.delete(agent.id)
     this.pendingDedup.delete(agent.id)
+    this.contextL.delete(agent.id)
   }
 
   /** Live ledger snapshot for UIs and tests. */
