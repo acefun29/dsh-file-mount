@@ -33,6 +33,12 @@ export type FileMountKey =
   | 'freshness.unknown'
   | 'freshness.expiredBadge'
   | 'freshness.expiredTitle'
+  | 'help.title'
+  | 'help.modelTitle'
+  | 'help.modelDesc'
+  | 'help.savingsTitle'
+  | 'help.savingsDesc'
+  | 'help.close'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -71,6 +77,12 @@ export const zh: Record<FileMountKey, string> = {
   'freshness.unknown': '未知',
   'freshness.expiredBadge': '过期 ×{n}',
   'freshness.expiredTitle': '该段已过期过 N 次；重新读取后恢复新鲜，历史计数保留',
+  'help.title': '新鲜度与节省机制说明',
+  'help.modelTitle': 'U 形注意力衰减与安全阀',
+  'help.modelDesc': '基于大模型注意力机制：位于首尾两端的内容因首因/近因效应保留高分并去重，中段注意力衰减区（低于阈值）将自动重读以保证准确性；连续 2 次重复读取自动触发安全阀放行。',
+  'help.savingsTitle': '净节省 Token 说明',
+  'help.savingsDesc': '净节省 = 去重省下的 Token − 插件状态通知开销。初次挂载时仅有微小的通知开销（约 20-30 tokens），多轮对话中一旦触发去重或增量补发，净节省将迅速转为大幅正收益。',
+  'help.close': '收起说明',
 }
 
 /** English dictionary. */
@@ -103,4 +115,10 @@ export const en: Record<FileMountKey, string> = {
   'freshness.unknown': 'unknown',
   'freshness.expiredBadge': 'expired ×{n}',
   'freshness.expiredTitle': 'This segment expired N times; a re-read refreshes it but keeps the count',
+  'help.title': 'Freshness & Token Savings Guide',
+  'help.modelTitle': 'U-Shaped Attention & Safety Valve',
+  'help.modelDesc': 'Based on LLM attention curves: head and tail segments maintain high scores and are deduped; mid-context segments scoring below threshold are automatically re-read. 2 consecutive full dedups trigger the safety valve.',
+  'help.savingsTitle': 'Net Savings Accounting',
+  'help.savingsDesc': 'Net Savings = Deduplicated Tokens − Plugin Notice Overhead. Initial mounts have a tiny overhead (~20-30 tokens); once dedup or increment triggers in multi-turn dialogues, net savings turn strongly positive.',
+  'help.close': 'Close',
 }

@@ -60,20 +60,25 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
   }, [sessionId, nodes])
   const [query, setQuery] = useState('')
   const [sortBy, setSortBy] = useState<'net' | 'path'>('net')
+  const [showHelp, setShowHelp] = useState(false)
   // Freshness segment rows are expanded by default; clicking collapses one file.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   // User-chosen freshness tier (null = follow the threshold the host stamped).
   const [tierId, setTierId] = useState<FreshnessTierId | null>(null)
   // The threshold the host stamped on the latest mount source (follows the
   // host settings, which the picker itself updates through the api).
-  const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.85
+  const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.4
   const effectiveThreshold = tierId === null ? foldedThreshold : tierOf(tierId)
 
-  const netTotal = useMemo(
-    () => mounts.reduce((total, mount) => total + mount.savedTokens - mount.spentTokens, 0),
-    [mounts],
-  )
-
+  const { savedTotal, spentTotal, netTotal } = useMemo(() => {
+    let saved = 0
+    let spent = 0
+    for (const mount of mounts) {
+      saved += mount.savedTokens
+      spent += mount.spentTokens
+    }
+    return { savedTotal: saved, spentTotal: spent, netTotal: saved - spent }
+  }, [mounts])
   if (mounts.length === 0) {
     return (
       <div className={css.root}>
@@ -92,7 +97,11 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
 
   return (
     <div className={css.root} data-mount-list>
-      <div className={css.summary + (netTotal > 0 ? ' ' + css.summaryPositive : ' ' + css.summaryNeutral)} data-mount-summary>
+      <div
+        className={css.summary + (netTotal > 0 ? ' ' + css.summaryPositive : ' ' + css.summaryNeutral)}
+        data-mount-summary
+        title={`累计去重节省 ${savedTotal} tokens，状态通知开销 ${spentTotal} tokens`}
+      >
         <span data-mount-net-total>{t('summary.netTotal').replace('{n}', String(netTotal))}</span>
         <span className={css.cny} data-mount-cny>{t('summary.cny').replace('{n}', cny.toFixed(2))}</span>
       </div>
@@ -134,9 +143,33 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
               <option key={tier.id} value={tier.id}>{t(`tier.${tier.id}`)} ({tier.threshold})</option>
             ))}
           </select>
-          <span className={css.tierHelp} title={t('tier.hint')}>?</span>
+          <button
+            type="button"
+            className={css.tierHelp + (showHelp ? ' ' + css.tierHelpActive : '')}
+            onClick={() => setShowHelp(!showHelp)}
+            title={t('tier.hint')}
+            aria-label={t('tier.label')}
+          >
+            ?
+          </button>
         </div>
       </div>
+      {showHelp && (
+        <div className={css.helpCard} data-mount-help-card>
+          <div className={css.helpHeader}>
+            <span>{t('help.title')}</span>
+            <button type="button" className={css.helpClose} onClick={() => setShowHelp(false)}>{t('help.close')}</button>
+          </div>
+          <div className={css.helpSection}>
+            <div className={css.helpSectionTitle}>• {t('help.modelTitle')}</div>
+            <div className={css.helpSectionDesc}>{t('help.modelDesc')}</div>
+          </div>
+          <div className={css.helpSection}>
+            <div className={css.helpSectionTitle}>• {t('help.savingsTitle')}</div>
+            <div className={css.helpSectionDesc}>{t('help.savingsDesc')}</div>
+          </div>
+        </div>
+      )}
       {visible.map((mount) => {
         const lines = mountedLines(mount)
         const pct = mount.totalLines > 0 ? Math.min(100, Math.round((lines / mount.totalLines) * 100)) : 0
