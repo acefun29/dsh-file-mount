@@ -6,9 +6,10 @@
  * merge rule come from mount-source.ts — the SAME rule the host replays
  * with (plan item 20).
  *
- * Freshness (attention-decay plan): assistant nodes expose per-request usage
- * (input tokens), so the fold also derives the current context length; each
- * segment's `born` position then maps to a display level (fresh/ok/warn/
+ * Freshness (attention-decay plan): assistant nodes expose per-request usage,
+ * so the fold also derives the current context length — the FULL prompt
+ * (uncached input + cacheRead + cacheWrite; DSH counts are disjoint) — and
+ * each segment's `born` position then maps to a display level (fresh/ok/warn/
  * expired/unknown) via the threshold the host stamped on the source.
  */
 import type { ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
@@ -65,13 +66,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-/** Narrow an assistant node's usage to an input-token count, if present. */
-function inputTokensOf(node: ConversationNode): number | undefined {
+/**
+ * Full prompt length of an assistant node's usage, or undefined when absent.
+ * DSH's TokenUsage counts are DISJOINT: `inputTokens` is the uncached input
+ * only, with the cached prefix reported separately as cacheReadTokens /
+ * cacheWriteTokens — the real context length is the sum of all three.
+ */
+function contextLengthOf(node: ConversationNode): number | undefined {
   if (node.kind !== 'assistant') return undefined
   const usage = (node as unknown as Record<string, unknown>)['usage']
   if (!isRecord(usage)) return undefined
-  const tokens = usage['inputTokens']
-  return typeof tokens === 'number' && Number.isFinite(tokens) && tokens >= 0 ? tokens : undefined
+  const parts = [usage['inputTokens'], usage['cacheReadTokens'], usage['cacheWriteTokens']]
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0)
+  if (parts.length === 0) return undefined
+  return parts.reduce((total, part) => total + part, 0)
 }
 
 /**
@@ -85,7 +93,7 @@ export function foldMounts(nodes: readonly ConversationNode[]): MountedFileView[
   let contextL: number | undefined
   let threshold = 0.85
   for (const node of nodes) {
-    const tokens = inputTokensOf(node)
+    const tokens = contextLengthOf(node)
     if (tokens !== undefined) contextL = tokens
     if (node.kind !== 'context') continue
     const parsed = parseMountSource(node.source)

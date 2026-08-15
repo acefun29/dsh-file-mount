@@ -129,7 +129,7 @@ describe('freshnessLevel', () => {
 })
 
 describe('foldMounts freshness', () => {
-  function assistantNode(seq: number, inputTokens: number): ConversationNode {
+  function assistantNode(seq: number, inputTokens: number, cacheReadTokens = 0): ConversationNode {
     return {
       kind: 'assistant',
       seq,
@@ -137,7 +137,7 @@ describe('foldMounts freshness', () => {
       turn: 1,
       step: 1,
       blocks: [],
-      usage: { inputTokens, outputTokens: 1 },
+      usage: { inputTokens, outputTokens: 1, ...cacheReadTokens > 0 ? { cacheReadTokens } : {} },
       messageId: 'm' + seq as never,
     } as unknown as ConversationNode
   }
@@ -154,5 +154,18 @@ describe('foldMounts freshness', () => {
     expect(mounts[0]!.contextL).toBe(400)
     expect(mounts[0]!.freshnessThreshold).toBe(0.5)
     expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 50, born: 150, expired: 1 }])
+  })
+
+  it('counts cached input in the context length (uncached + cacheRead)', () => {
+    // DSH usage counts are disjoint: inputTokens is uncached only, the cached
+    // prefix is cacheReadTokens — the full prompt is their sum.
+    const mounts = foldMounts([
+      assistantNode(1, 200, 800),
+      contextNode(mountSource({ mounted: [{ start: 1, end: 50, born: 900, expired: 0 }] }), 2),
+    ])
+    expect(mounts[0]!.contextL).toBe(1000)
+    // born 900 at L 1000 -> drift 0.10 -> fresh; the uncached-only 200 would
+    // have made the same segment "impossibly fresh" forever.
+    expect(freshnessLevel(900, mounts[0]!.contextL)).toBe('fresh')
   })
 })
