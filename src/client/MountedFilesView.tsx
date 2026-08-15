@@ -114,25 +114,28 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
           <option value="net">{t('list.sortNet')}</option>
           <option value="path">{t('list.sortPath')}</option>
         </select>
-        <select
-          className={css.sort}
-          data-mount-tier
-          title={t('tier.label')}
-          aria-label={t('tier.label')}
-          value={tierId ?? nearestTier(foldedThreshold)}
-          onChange={(event) => {
-            const id = event.target.value as FreshnessTierId
-            setTierId(id)
-            // Push to the host: the settings namespace update persists and
-            // re-stamps future mount sources; the local override already
-            // re-renders this view immediately.
-            api?.update({ ns: 'file-mount', patch: { freshnessThreshold: tierOf(id) } }).catch(() => {})
-          }}
-        >
-          {FRESHNESS_TIERS.map((tier) => (
-            <option key={tier.id} value={tier.id}>{t(`tier.${tier.id}`)}</option>
-          ))}
-        </select>
+        <div className={css.tierControl}>
+          <select
+            className={css.sort}
+            data-mount-tier
+            title={t('tier.hint')}
+            aria-label={t('tier.label')}
+            value={tierId ?? nearestTier(foldedThreshold)}
+            onChange={(event) => {
+              const id = event.target.value as FreshnessTierId
+              setTierId(id)
+              // Push to the host: the settings namespace update persists and
+              // re-stamps future mount sources; the local override already
+              // re-renders this view immediately.
+              api?.update({ ns: 'file-mount', patch: { freshnessThreshold: tierOf(id) } }).catch(() => {})
+            }}
+          >
+            {FRESHNESS_TIERS.map((tier) => (
+              <option key={tier.id} value={tier.id}>{t(`tier.${tier.id}`)} ({tier.threshold})</option>
+            ))}
+          </select>
+          <span className={css.tierHelp} title={t('tier.hint')}>?</span>
+        </div>
       </div>
       {visible.map((mount) => {
         const lines = mountedLines(mount)
@@ -143,13 +146,33 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
         const netDiff = mount.savedTokens - mount.spentTokens
         return (
           <div key={mount.path} className={css.row} data-mount-row data-mount-kind={mount.mountKind}>
-            <div className={css.pathRow}>
+            <div
+              className={css.pathRow}
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                const next = new Set(collapsed)
+                if (isCollapsed) next.delete(mount.path)
+                else next.add(mount.path)
+                setCollapsed(next)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  const next = new Set(collapsed)
+                  if (isCollapsed) next.delete(mount.path)
+                  else next.add(mount.path)
+                  setCollapsed(next)
+                }
+              }}
+            >
               <button
                 type="button"
                 className={css.expand}
                 data-mount-expand
                 aria-expanded={!isCollapsed}
-                onClick={() => {
+                onClick={(event) => {
+                  event.stopPropagation()
                   const next = new Set(collapsed)
                   if (isCollapsed) next.delete(mount.path)
                   else next.add(mount.path)

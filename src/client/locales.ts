@@ -13,6 +13,7 @@ export type FileMountKey =
   | 'list.sortNet'
   | 'list.sortPath'
   | 'tier.label'
+  | 'tier.hint'
   | 'tier.lenient'
   | 'tier.standard'
   | 'tier.sensitive'
@@ -50,6 +51,7 @@ export const zh: Record<FileMountKey, string> = {
   'list.sortNet': '按净节省排序',
   'list.sortPath': '按路径排序',
   'tier.label': '新鲜度阈值',
+  'tier.hint': '新鲜度阈值（得分低于此值视为过期重读）：宽松(0.2) / 标准(0.3) / 敏感(0.4) / 激进(0.5)',
   'tier.lenient': '宽松',
   'tier.standard': '标准',
   'tier.sensitive': '敏感',
@@ -81,6 +83,7 @@ export const en: Record<FileMountKey, string> = {
   'list.sortNet': 'Sort by net savings',
   'list.sortPath': 'Sort by path',
   'tier.label': 'Freshness threshold',
+  'tier.hint': 'Freshness threshold (scores below this expire and re-read): Lenient(0.2) / Standard(0.3) / Sensitive(0.4) / Aggressive(0.5)',
   'tier.lenient': 'Lenient',
   'tier.standard': 'Standard',
   'tier.sensitive': 'Sensitive',
