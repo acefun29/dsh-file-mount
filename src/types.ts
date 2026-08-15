@@ -14,6 +14,30 @@ export interface Segment {
   end: number
 }
 
+/**
+ * Freshness metadata for one mounted segment (attention-decay plan). `born` is
+ * the context position (input tokens) where the segment was mounted; `expired`
+ * counts how many times this content expired and was re-read (history kept
+ * across expiry so the UI can show the count).
+ */
+export interface SegmentMeta {
+  /** Context position (input tokens) at mount time; undefined when unknown
+   * (pre-freshness messages or no usage data on the session). */
+  born?: number
+  /** Times this content expired and was re-read; never resets. */
+  expired: number
+}
+
+/** One ledger segment: geometry + freshness metadata (the ledger's working unit). */
+export interface LedgerSegment extends Segment, SegmentMeta {}
+
+/** One expired segment kept as history (geometry + count, no born). */
+export interface ExpiredSegment {
+  start: number
+  end: number
+  expired: number
+}
+
 /** How a mount extended the ledger (observability and fold semantics). */
 export type MountKind = 'new' | 'increment' | 'remount' | 'dedup'
 
