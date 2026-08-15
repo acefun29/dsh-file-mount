@@ -1,10 +1,17 @@
 /**
- * Pure client-side fold of the mount ledger: one entry per mounted file,
- * upserted from the plugin-injected context messages in conversation-node
- * order. The host's structured message source is the durable carrier, so
- * this fold works live and on resumed history alike. Validation and the
- * merge rule come from mount-source.ts — the SAME rule the host replays
- * with (plan item 20).
+ * Client-side fold of the mount ledger: one entry per mounted file, upserted
+ * from the plugin-injected context messages in conversation-node order. The
+ * host's structured message source is the durable carrier, so this fold works
+ * live and on resumed history alike. Validation and the merge rule come from
+ * mount-source.ts — the SAME rule the host replays with (plan item 20).
+ *
+ * The browser conversation is a PAGINATED history window (tail page first,
+ * older pages only on scroll), so `snapshot.nodes` shrinks at the head as the
+ * session grows. {@link MountFold} therefore persists its per-session state
+ * across snapshot revisions: a mount message that scrolls out of the loaded
+ * window keeps its file on the dashboard, and re-delivered messages are
+ * folded exactly once (no double token counts). `foldMounts` remains as the
+ * stateless one-shot fold for tests and one-off consumers.
  *
  * Freshness (attention-decay plan): assistant nodes expose per-request usage,
  * so the fold also derives the current context length — the FULL prompt
@@ -14,7 +21,7 @@
  */
 import type { ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
 import type { LedgerSegment } from '../types.ts'
-import { applyMountState, parseMountSource } from '../mount-source.ts'
+import { applyMountState, parseMountSource, type MountDelta, type MountState } from '../mount-source.ts'
 
 /** One mounted file as the view presents it. */
 export interface MountedFileView {
@@ -82,47 +89,98 @@ function contextLengthOf(node: ConversationNode): number | undefined {
   return parts.reduce((total, part) => total + part, 0)
 }
 
+/** One stored mount message for a path, kept for ordered re-derivation. */
+interface StoredMount {
+  seq: number
+  kind: 'new' | 'increment' | 'remount' | 'dedup'
+  delta: MountDelta
+}
+
 /**
- * Fold conversation nodes into the mounted-file list. Foreign or malformed
- * nodes are skipped; a hash change replaces the entry wholesale (the old
- * mount is stale), same-hash messages union their ranges. The latest
- * assistant usage sets the context length every view carries for freshness.
+ * Stateful fold that survives the client's paginated history window. Per
+ * session it keeps every validated mount message per path and re-derives the
+ * entry in seq order on each fold, so (a) messages that scroll out of the
+ * loaded window keep their file visible, (b) re-delivered messages fold
+ * exactly once, and (c) older messages arriving later (page-up) cannot
+ * overwrite newer state. A sessionId change resets the accumulated state.
  */
-export function foldMounts(nodes: readonly ConversationNode[]): MountedFileView[] {
-  const byPath = new Map<string, MountedFileView>()
-  let contextL: number | undefined
-  let threshold = 0.85
-  for (const node of nodes) {
-    const tokens = contextLengthOf(node)
-    if (tokens !== undefined) contextL = tokens
-    if (node.kind !== 'context') continue
-    const parsed = parseMountSource(node.source)
-    if (parsed === undefined) continue
-    const existing = byPath.get(parsed.path)
-    const state = existing !== undefined
-      ? { hash: existing.hash, totalLines: existing.totalLines, segments: existing.ranges, savedTokens: existing.savedTokens, spentTokens: existing.spentTokens }
-      : undefined
-    const next = applyMountState(state, parsed.delta)
-    if (isRecord(node.source) && typeof node.source['freshnessThreshold'] === 'number') {
-      threshold = node.source['freshnessThreshold'] as number
+export class MountFold {
+  private sessionId: string | undefined
+  private readonly paths = new Map<string, StoredMount[]>()
+  private readonly folded = new Set<number>()
+  private lastThreshold = 0.85
+  private lastThresholdSeq = -1
+
+  /**
+   * Fold one snapshot revision (ascending seq) into the persistent state.
+   * @param sessionId - owning conversation; a change resets the fold.
+   * @param nodes - the currently loaded conversation nodes (windowed).
+   * @returns the mounted-file views (sorted by last message seq).
+   */
+  fold(sessionId: string, nodes: readonly ConversationNode[]): MountedFileView[] {
+    if (this.sessionId !== sessionId) {
+      this.sessionId = sessionId
+      this.paths.clear()
+      this.folded.clear()
+      this.lastThreshold = 0.85
+      this.lastThresholdSeq = -1
     }
-    byPath.set(parsed.path, {
-      path: parsed.path,
-      mountKind: parsed.mountKind,
-      seq: node.seq,
-      hash: next.hash,
-      totalLines: next.totalLines,
-      ranges: next.segments,
-      savedTokens: next.savedTokens,
-      spentTokens: next.spentTokens,
-      freshnessThreshold: threshold,
-    })
+    let contextL: number | undefined
+    for (const node of nodes) {
+      const tokens = contextLengthOf(node)
+      if (tokens !== undefined) contextL = tokens
+      if (node.kind !== 'context') continue
+      const parsed = parseMountSource(node.source)
+      if (parsed === undefined) continue
+      if (this.folded.has(node.seq)) continue
+      this.folded.add(node.seq)
+      if (isRecord(node.source) && typeof node.source['freshnessThreshold'] === 'number') {
+        const threshold = node.source['freshnessThreshold'] as number
+        if (node.seq > this.lastThresholdSeq) {
+          this.lastThresholdSeq = node.seq
+          this.lastThreshold = threshold
+        }
+      }
+      const list = this.paths.get(parsed.path) ?? []
+      list.push({ seq: node.seq, kind: parsed.mountKind, delta: parsed.delta })
+      list.sort((a, b) => a.seq - b.seq)
+      this.paths.set(parsed.path, list)
+    }
+    const views: MountedFileView[] = []
+    for (const [path, messages] of this.paths) {
+      let state: MountState | undefined
+      for (const message of messages) state = applyMountState(state, message.delta)
+      if (state === undefined) continue
+      const last = messages[messages.length - 1]!
+      views.push({
+        path,
+        mountKind: last.kind,
+        seq: last.seq,
+        hash: state.hash,
+        totalLines: state.totalLines,
+        ranges: state.segments,
+        savedTokens: state.savedTokens,
+        spentTokens: state.spentTokens,
+        freshnessThreshold: this.lastThreshold,
+      })
+    }
+    views.sort((a, b) => a.seq - b.seq)
+    // Every view shows the CURRENT freshness, so stamp the final context
+    // length (the last assistant usage in the snapshot) on all entries.
+    if (contextL !== undefined) {
+      for (const view of views) view.contextL = contextL
+    }
+    return views
   }
-  // Every view shows the CURRENT freshness, so stamp the final context length
-  // (the last assistant usage) on all entries after the fold completes.
-  const views = [...byPath.values()].sort((a, b) => a.seq - b.seq)
-  if (contextL !== undefined) {
-    for (const view of views) view.contextL = contextL
-  }
-  return views
+}
+
+/**
+ * One-shot fold of a node list (stateless). The live dashboard should use
+ * {@link MountFold}, which persists across the paginated history window.
+ * Foreign or malformed nodes are skipped; a hash change replaces the entry
+ * wholesale (the old mount is stale), same-hash messages union their ranges.
+ */
+
+export function foldMounts(nodes: readonly ConversationNode[]): MountedFileView[] {
+  return new MountFold().fold('', nodes)
 }
