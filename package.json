@@ -1,7 +1,7 @@
 {
   "name": "dsh-file-mount",
   "description": "DeepSeek Harness plugin: incremental file mounting with read dedupe, version-aware invalidation, and a mounted-files view (host half + web client half)",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",

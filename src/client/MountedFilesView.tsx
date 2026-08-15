@@ -88,11 +88,11 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
     .sort((a, b) => sortBy === 'path'
       ? a.path.localeCompare(b.path)
       : (b.savedTokens - b.spentTokens) - (a.savedTokens - a.spentTokens))
-  const cny = (netTotal / 1_000_000) * CNY_PER_MILLION_TOKENS
+  const cny = (Math.max(0, netTotal) / 1_000_000) * CNY_PER_MILLION_TOKENS
 
   return (
     <div className={css.root} data-mount-list>
-      <div className={css.summary} data-mount-summary>
+      <div className={css.summary + (netTotal > 0 ? ' ' + css.summaryPositive : ' ' + css.summaryNeutral)} data-mount-summary>
         <span data-mount-net-total>{t('summary.netTotal').replace('{n}', String(netTotal))}</span>
         <span className={css.cny} data-mount-cny>{t('summary.cny').replace('{n}', cny.toFixed(2))}</span>
       </div>
@@ -140,6 +140,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
         const isCollapsed = collapsed.has(mount.path)
         const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens))
         const worst = levels.includes('expired') ? 'expired' : levels.includes('warn') ? 'warn' : levels.includes('ok') ? 'ok' : 'fresh'
+        const netDiff = mount.savedTokens - mount.spentTokens
         return (
           <div key={mount.path} className={css.row} data-mount-row data-mount-kind={mount.mountKind}>
             <div className={css.pathRow}>
@@ -158,38 +159,44 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
                 {isCollapsed ? '▸' : '▾'}
               </button>
               <div className={css.path} title={mount.path}>{mount.path}</div>
-              <span className={css.freshnessDot + ' ' + css['freshnessDot_' + worst]} data-mount-file-freshness={worst} />
+              <span className={css.freshnessDot + ' ' + (css['freshnessDot_' + worst] ?? '')} data-mount-file-freshness={worst} title={t(levelKey(worst))} />
             </div>
             <div className={css.progress} data-mount-progress role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
               <div className={css.progressFill} style={{ width: `${pct}%` }} />
             </div>
             <div className={css.meta}>
-              <span className={css.badge} data-mount-badge>{t(`kind.${mount.mountKind}`)}</span>
+              <span className={css.badge + ' ' + (css['badge_' + mount.mountKind] ?? '')} data-mount-badge>{t(`kind.${mount.mountKind}`)}</span>
               <span className={css.ranges} data-mount-ranges>
                 {mount.ranges.map((range) => formatRange(range.start, range.end)).join(', ')}
               </span>
               <span className={css.hash} data-mount-hash>{t('list.hash')} {mount.hash.slice(0, 8)}</span>
               <span className={css.lines} data-mount-lines>{lines}/{mount.totalLines} {t('list.lines')}</span>
-              <span className={css.saved} data-mount-net>{t('row.net').replace('{n}', String(mount.savedTokens - mount.spentTokens))}</span>
+              <span className={css.saved + (netDiff > 0 ? ' ' + css.savedPositive : '')} data-mount-net>
+                {t('row.net').replace('{n}', String(netDiff))}
+              </span>
               {mount.mountKind === 'remount' && (
                 <span className={css.changed} data-mount-changed>{t('row.changed')}</span>
               )}
             </div>
-            {!isCollapsed && mount.ranges.map((seg, i) => {
-              const level = freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens)
-              return (
-                <div key={i} className={css.segment} data-mount-segment data-freshness={level}>
-                  <span className={css.segmentBar + ' ' + css['segmentBar_' + level]} />
-                  <span className={css.segmentRange}>{formatRange(seg.start, seg.end)}</span>
-                  <span className={css.segmentLevel}>{t(levelKey(level))}</span>
-                  {seg.expired > 0 && (
-                    <span className={css.expiredBadge} data-mount-expired-badge title={t('freshness.expiredTitle')}>
-                      {t('freshness.expiredBadge').replace('{n}', String(seg.expired))}
-                    </span>
-                  )}
-                </div>
-              )
-            })}
+            {!isCollapsed && mount.ranges.length > 0 && (
+              <div className={css.segmentsList}>
+                {mount.ranges.map((seg, i) => {
+                  const level = freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens)
+                  return (
+                    <div key={i} className={css.segment} data-mount-segment data-freshness={level}>
+                      <span className={css.segmentBar + ' ' + (css['segmentBar_' + level] ?? '')} />
+                      <span className={css.segmentRange}>{formatRange(seg.start, seg.end)}</span>
+                      <span className={css.segmentLevel}>{t(levelKey(level))}</span>
+                      {seg.expired > 0 && (
+                        <span className={css.expiredBadge} data-mount-expired-badge title={t('freshness.expiredTitle')}>
+                          {t('freshness.expiredBadge').replace('{n}', String(seg.expired))}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )
       })}
