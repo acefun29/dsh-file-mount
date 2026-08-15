@@ -29,6 +29,17 @@ function textWithUsage(text: string, inputTokens: number): StreamChunk[] {
     { type: 'finish', reason: { kind: 'stop' } },
   ]
 }
+
+/** Text chunks with a full controllable usage (uncached + cached input). */
+function textWithUsageCached(text: string, inputTokens: number, cacheReadTokens: number): StreamChunk[] {
+  return [
+    { type: 'block-start', index: 0, blockType: 'text' },
+    ...Array.from(text, (char): StreamChunk => ({ type: 'text-delta', index: 0, text: char })),
+    { type: 'block-end', index: 0, block: { type: 'text', text } },
+    { type: 'usage', usage: { inputTokens, cacheReadTokens, outputTokens: text.length } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]
+}
 function send(agent: Agent, text: string): void {
   agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
 }
@@ -531,6 +542,46 @@ describe('file-mount integration', () => {
     expect(geo(second)).toEqual([{ start: 1, end: 3 }])
     expect(second[0]!.expired).toBe(1)
     expect(second[0]!.born).toBeGreaterThan(310)
+    expect(resultText(agent, 'c2')).toContain('+L1-3 - range added to context')
+  })
+
+  it('freshness clock counts cached input: expiry follows the FULL context, not the uncached delta', async () => {
+    const subject = join(dir, 'clock-cached.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+
+    // Request totals: 1000 -> 1100 (mount) -> 1200 -> 12300 -> 12400 (re-read).
+    // The UNCACHED deltas (150 -> 400) would keep the segment "fresh" forever
+    // (born > L); the full-prompt clock sees 1100 -> 12400 and expires it.
+    const adapter = new MockAdapter([
+      textWithUsageCached('hi', 100, 900),
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }, 150, 950),
+      textWithUsageCached('ok', 200, 1000),
+      textWithUsageCached('grow', 300, 12000),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 400, 12000),
+      textWithUsageCached('done', 500, 12000),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { freshnessThreshold: 0.3 } })
+    const agent = ctx.agentLoop.create(SessionId('it-clock-cached'), { provider: 'mock', model: 'mock' })
+    send(agent, 'hello')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    send(agent, 'grow context')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'increment'])
+    const first = sources[0]!['mounted'] as { start: number; end: number; born?: number; expired: number }[]
+    // born anchors at the FULL context at mount (1100) + block estimate, not
+    // the uncached 150.
+    expect(first[0]!.born!).toBeGreaterThan(1100)
+    expect(first[0]!.born!).toBeLessThan(1150)
+    const second = sources[1]!['mounted'] as { start: number; end: number; born?: number; expired: number }[]
+    expect(second[0]!.expired).toBe(1)
+    expect(second[0]!.born!).toBeGreaterThan(12400)
     expect(resultText(agent, 'c2')).toContain('+L1-3 - range added to context')
   })
 })
