@@ -7,7 +7,7 @@ DeepSeek Harness 插件：**文件增量挂载 + 重复读取去重**。记录�
 ## 效果
 
 - **模型侧**：读过的行范围不重复进上下文（去重 marker）；新内容只注入缺失区间（增量挂载）；文件改动后只补改动的行（行级 diff，日志追加只补新尾巴）；AI 自己写过的文件回头读直接免单；`file_mount_forget` 工具让模型能主动强制重读。
-- **界面侧**：「挂载文件」标签页是仪表盘——彩色进度条（看过百分之几）、搜索框、按净节省/路径排序、顶部显示本次会话净节省并折算人民币；对话区有上下文注入折叠行，「文件已变更」时行上有角标。
+- **界面侧**：「挂载文件」标签页是仪表盘——每个文件行可展开成**文件段**列表，每段带**新鲜度色带**（绿=新鲜/黄=一般/橙=接近过期/红=已过期/灰=未知）和**过期次数徽标**；另有进度条、搜索框、排序、净节省与人民币折算；对话区有上下文注入折叠行，「文件已变更」时行上有角标。
 - **节省统计**：中文按 1 字 ≈ 1 token、其他按 4 字符 ≈ 1 token 估算；同时记账「省下的」和「纸条花掉的」，界面显示**净值**；可选把跨会话总账落盘（`statsFile`）。
 
 ## 安装
@@ -39,6 +39,8 @@ npx @deepseek-ai/dsh --profile web
     maxManagedBytes: 16777216      # 超过此大小的文件不接管，原样放行
     excludeGlobs: ['**/node_modules/**']  # 这些路径永远原样放行
     statsFile: ./dsh-file-mount-stats.json  # 可选：跨会话总账落盘路径
+    freshnessEnabled: true        # 新鲜度（注意力衰减）：默认开
+    freshnessThreshold: 0.85      # 漂移率超过此值视为过期（0.85 = 段被推到上下文前 15%）
 ```
 
 ## 工作原理
@@ -51,6 +53,7 @@ npx @deepseek-ai/dsh --profile web
 4. 挂载状态结构化写入注入消息的 source（标准 `user/message` 事件），恢复重放与浏览器折叠共用同一载体、同一套合并规则（`mount-source.ts`）。
 5. 压缩感知：识别 DSH 标准压缩 checkpoint（source `{kind:'plugin', plugin:'compact'}` 的 `sourceEventSeqs`），被 shadow 的挂载消息不再计入账本。
 6. 模型可调用 `file_mount_forget` 工具主动作废某个文件的账（强制重读）。
+7. **新鲜度（注意力衰减）**：每个挂载段记录挂载时的上下文位置（最近一轮请求的 input tokens + 注入块估算）；会话每轮请求的 usage 增量推进「当前上下文长度」，段距上下文尾部的漂移率决定新鲜度级别（U 型注意力曲线的尾部注意区=新鲜，> 阈值=过期）。**过期段自动摘除账本**（下次 read 重新发送，token 换可靠性），摘除历史保留——重新挂载时过期次数 +1，UI 显示徽标。全程无定时器：过期检查只在 read 时惰性执行。
 
 路径身份：绝对路径 + `realpath`（软链接统一到真实文件）+ 大小写折叠（按文件系统实测，Windows/Mac 默认折叠）。
 
@@ -61,6 +64,7 @@ npx @deepseek-ai/dsh --profile web
 - 依赖 read / write / edit 工具 canonical value 的结构；结构变化时守卫失效并原生透传（集成测试锁定）。
 - 超过 `maxManagedBytes` 的文件与 `excludeGlobs` 命中的路径不接管，原样放行（不做抽检：抽检有「改了没看出来」的风险）。
 - 自定义会话事件类型在 rc.6 无法安全持久化，故账本载体选用标准事件上的结构化 source。
+- 新鲜度是启发式：段过期不代表内容被移出上下文（只有压缩才会），而是「注意力已衰减、模型基本看不见」，故过期重发是故意的 token 开销；无 usage 数据的会话（如某些适配器）显示灰色「未知」，不判过期。
 - 仪表盘「点行跳回聊天」、跨会话总账的界面展示、「文件已变」实时提示暂缓（浏览器端没有对应通道）。
 
 ## 常见问题
@@ -75,7 +79,7 @@ npx @deepseek-ai/dsh --profile web
 
 ```sh
 pnpm install
-pnpm test        # vitest（133 用例：单元 + 真实 read/write 循环集成 + 持久化往返 + 压缩感知 + 客户端组件）
+pnpm test        # vitest（146 用例：单元 + 真实 read/write 循环集成 + 持久化往返 + 压缩感知 + 新鲜度 + 客户端组件）
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown（lib/index.js / lib/client.js）
 ```
