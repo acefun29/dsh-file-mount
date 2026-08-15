@@ -584,4 +584,74 @@ describe('file-mount integration', () => {
     expect(second[0]!.born!).toBeGreaterThan(12400)
     expect(resultText(agent, 'c2')).toContain('+L1-3 - range added to context')
   })
+
+  it('freshness threshold follows the settings namespace when the host provides one', async () => {
+    // Duck-typed stand-in for the dsh-settings seam (the plugin wires without
+    // importing it): one independent scope per registered namespace, each with
+    // its own watcher — mirrors the real provider, which other harness
+    // plugins also register sections through.
+    interface NamespaceState {
+      base: { freshnessThreshold?: number } | undefined
+      section: { freshnessThreshold?: number }
+      watcher: (() => void) | undefined
+    }
+    const namespaces = new Map<string, {
+      get(): { freshnessThreshold?: number }
+      update(patch: { freshnessThreshold?: number }): Promise<void>
+    }>()
+    const fakeSettings = {
+      register(ns: string, _schema: unknown, options?: { base?: unknown }) {
+        const state: NamespaceState = {
+          base: options?.base as { freshnessThreshold?: number } | undefined,
+          section: {},
+          watcher: undefined,
+        }
+        const scope = {
+          get: () => ({ ...state.base, ...state.section }),
+          watch: (callback: () => void) => {
+            state.watcher = callback
+            return () => { if (state.watcher === callback) state.watcher = undefined }
+          },
+          update: async (patch: { freshnessThreshold?: number }) => {
+            state.section = { ...state.section, ...patch }
+            state.watcher?.()
+          },
+        }
+        namespaces.set(ns, scope)
+        return scope
+      },
+    }
+    const fileMountNs = () => namespaces.get('file-mount')!
+    const subjectA = join(dir, 'settings-a.txt')
+    const subjectB = join(dir, 'settings-b.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subjectA, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+    await writeFile(subjectB, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subjectA, offset: 1, limit: 3 }),
+      textResponse('ok'),
+      toolCallResponse('c2', 'read', { file_path: subjectB, offset: 1, limit: 3 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { freshnessThreshold: 0.3 } })
+    // Providing the service after boot still resolves the plugin's optional
+    // settings seam (it listens for the provider's binding event).
+    ctx.provide('settings', fakeSettings)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const agent = ctx.agentLoop.create(SessionId('it-settings'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read a')
+    await waitForIdle(ctx, agent)
+    // The config value is the base layer: the first mount stamps it.
+    const first = mountMessages(agent)
+    expect(first[0]!['freshnessThreshold']).toBe(0.3)
+    // A runtime tier change flows into the ledger: update the namespace, then
+    // the next mount source carries the new effective threshold.
+    await fileMountNs().update({ freshnessThreshold: 0.5 })
+    send(agent, 'read b')
+    await waitForIdle(ctx, agent)
+    const sources = mountMessages(agent)
+    expect(sources).toHaveLength(2)
+    expect(sources[sources.length - 1]!['freshnessThreshold']).toBe(0.5)
+  })
 })
