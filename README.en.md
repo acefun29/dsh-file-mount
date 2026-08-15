@@ -40,7 +40,7 @@ One package, two halves: `dsh.bundle.patch` mounts the host plugin row; the `dsh
     excludeGlobs: ['**/node_modules/**']  # these paths always pass through
     statsFile: ./dsh-file-mount-stats.json  # optional cross-session totals file
     freshnessEnabled: true        # freshness (attention decay): on by default
-    freshnessThreshold: 0.85      # drift past this counts as expired (0.85 = pushed into the top 15%)
+    freshnessThreshold: 0.85      # drift past this counts as expired (0.85 = pushed into the top 15%); the Mounted Files panel can change it live (lenient 0.95 / standard 0.85 / sensitive 0.7 / aggressive 0.5) — persisted when the host provides a settings service
 ```
 
 ## How it works
@@ -53,7 +53,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
 5. Compaction awareness: canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are skipped.
 6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read).
-7. **Freshness (attention decay)**: every mounted segment records its context position at mount time (last request FULL input tokens — uncached + cacheRead + cacheWrite; DSH usage counts are disjoint, `inputTokens` alone is the uncached portion only — plus the block estimate); per-request usage advances the current context length, and a segment's drift from the context tail maps to a display level (tail attention zone = fresh, past the threshold = expired). **Expired segments leave the ledger** (the next read re-sends them — tokens spent for reliability) and the count is kept: a re-mount inherits expired+1, shown as a badge. No timers: expiry checks only run lazily on reads.
+7. **Freshness (attention decay)**: every mounted segment records its context position at mount time (last request FULL input tokens — uncached + cacheRead + cacheWrite; DSH usage counts are disjoint, `inputTokens` alone is the uncached portion only — plus the block estimate); per-request usage advances the current context length, and a segment's drift from the context tail maps to a display level (tail attention zone = fresh, past the threshold = expired). **Expired segments leave the ledger** (the next read re-sends them — tokens spent for reliability) and the count is kept: a re-mount inherits expired+1, shown as a badge. No timers: expiry checks only run lazily on reads. **The threshold is adjustable live from the panel**: the toolbar offers lenient/standard/sensitive/aggressive tiers; a change re-renders the dashboard immediately and, when the host provides a settings service, is written to the `file-mount` namespace (persisted; later expiry decisions and mount sources use the new value).
 
 Path identity: absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold).
 
