@@ -166,7 +166,9 @@ export class FileMountService extends Service {
   private compatWarned = false
   /** Per-session silent-dedup savings waiting to ride the next real message. */
   private readonly pendingDedup = new Map<string, Map<string, number>>()
-  /** Per-session current context length (latest request input tokens, from usage). */
+  /** Per-session current context length (latest request FULL prompt tokens:
+   * uncached input + cacheRead + cacheWrite, from usage — DSH counts are
+   * disjoint). */
   private readonly contextL = new Map<string, number>()
   private readonly excludeGlobs: readonly string[]
   private readonly statsFile: string | undefined
@@ -734,7 +736,16 @@ export class FileMountService extends Service {
     if (dirty) this.refold(agent, store)
   }
 
-  /** Update the per-session context length from one assistant/message usage. */
+  /**
+   * Update the per-session context length from one assistant/message usage.
+   * DSH's TokenUsage counts are DISJOINT: `inputTokens` is the UNCACHED input
+   * only, with the cached prefix reported separately as cacheReadTokens /
+   * cacheWriteTokens. Freshness measures a segment's position in the REAL
+   * prompt, so the clock must be the sum of all three — using the uncached
+   * delta alone makes L wiggle with cache noise (hundreds on hits, the full
+   * context on misses), expiring fresh mounts on noise and never expiring
+   * buried ones.
+   */
   private trackContextLength(agentId: string, event: unknown): void {
     if (typeof event !== 'object' || event === null) return
     const record = event as Record<string, unknown>
@@ -743,10 +754,11 @@ export class FileMountService extends Service {
     if (typeof data !== 'object' || data === null) return
     const usage = (data as Record<string, unknown>)['usage']
     if (typeof usage !== 'object' || usage === null) return
-    const inputTokens = (usage as Record<string, unknown>)['inputTokens']
-    if (typeof inputTokens === 'number' && Number.isFinite(inputTokens) && inputTokens >= 0) {
-      this.contextL.set(agentId, inputTokens)
-    }
+    const tokens = usage as Record<string, unknown>
+    const parts = [tokens['inputTokens'], tokens['cacheReadTokens'], tokens['cacheWriteTokens']]
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0)
+    if (parts.length === 0) return
+    this.contextL.set(agentId, parts.reduce((total, part) => total + part, 0))
   }
 
   /** Re-derive the ledger from the still-visible mount messages. */

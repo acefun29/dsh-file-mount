@@ -168,7 +168,8 @@ export interface PruneResult {
 /**
  * Lazy freshness check (attention-decay plan): a segment is expired when its
  * drift from the context tail passes the threshold — r = (L - born) / L with
- * L the current context length (latest request input tokens). Expired
+ * L the current context length (latest request FULL prompt tokens: uncached
+ * input + cacheRead + cacheWrite — DSH counts are disjoint). Expired
  * segments leave the ledger (they stop deduping; the next read re-sends them)
  * and their expired count moves into the history. Segments without a born
  * (no usage data yet, or pre-freshness messages) are never pruned.
