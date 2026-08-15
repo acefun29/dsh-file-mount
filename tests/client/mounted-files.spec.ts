@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { foldMounts } from '../../src/client/mounted-files.ts'
+import { foldMounts, freshnessLevel } from '../../src/client/mounted-files.ts'
 
 function contextNode(source: Record<string, unknown>, seq = 1, time = 1000): ContextMessageNode {
   return {
@@ -109,5 +109,50 @@ describe('foldMounts', () => {
       contextNode(mountSource(), 1),
     ])
     expect(mounts.map((m) => m.path)).toEqual(['src/a.ts', 'b.ts'])
+  })
+})
+
+describe('freshnessLevel', () => {
+  it('maps drift from the context tail to display levels', () => {
+    expect(freshnessLevel(90, 100)).toBe('fresh')      // drift 0.10
+    expect(freshnessLevel(70, 100)).toBe('ok')         // drift 0.30
+    expect(freshnessLevel(30, 100)).toBe('warn')       // drift 0.70
+    expect(freshnessLevel(5, 100)).toBe('expired')     // drift 0.95
+    expect(freshnessLevel(undefined, 100)).toBe('unknown')
+    expect(freshnessLevel(50, undefined)).toBe('unknown')
+  })
+
+  it('respects the configured threshold', () => {
+    expect(freshnessLevel(50, 100, 0.3)).toBe('expired') // drift 0.5 > 0.3
+    expect(freshnessLevel(50, 100, 0.9)).toBe('ok')
+  })
+})
+
+describe('foldMounts freshness', () => {
+  function assistantNode(seq: number, inputTokens: number): ConversationNode {
+    return {
+      kind: 'assistant',
+      seq,
+      time: seq * 1000,
+      turn: 1,
+      step: 1,
+      blocks: [],
+      usage: { inputTokens, outputTokens: 1 },
+      messageId: 'm' + seq as never,
+    } as unknown as ConversationNode
+  }
+
+  it('derives the context length from assistant usage and carries segment meta', () => {
+    const mounts = foldMounts([
+      assistantNode(1, 200),
+      contextNode(mountSource({
+        mounted: [{ start: 1, end: 50, born: 150, expired: 1 }],
+        freshnessThreshold: 0.5,
+      }), 2),
+      assistantNode(3, 400),
+    ])
+    expect(mounts[0]!.contextL).toBe(400)
+    expect(mounts[0]!.freshnessThreshold).toBe(0.5)
+    expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 50, born: 150, expired: 1 }])
   })
 })
