@@ -100,6 +100,77 @@
   border-radius: 6px;
 }
 
+.pathRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.expand {
+  flex: none;
+  width: 18px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-secondary, #8a8f98);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.freshnessDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary, #8a8f98);
+}
+.freshnessDot_fresh { background: #22c55e; }
+.freshnessDot_ok { background: #eab308; }
+.freshnessDot_warn { background: #f97316; }
+.freshnessDot_expired { background: #ef4444; }
+
+.segment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 2px 24px;
+  font-size: 11px;
+  color: var(--text-secondary, #8a8f98);
+}
+
+.segmentBar {
+  flex: none;
+  width: 4px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--text-secondary, #8a8f98);
+}
+.segmentBar_fresh { background: #22c55e; }
+.segmentBar_ok { background: #eab308; }
+.segmentBar_warn { background: #f97316; }
+.segmentBar_expired { background: #ef4444; }
+.segmentBar_unknown { background: #6b7280; }
+
+.segmentRange {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text-primary, #e5e7eb);
+}
+
+.segmentLevel {
+  color: var(--text-secondary, #8a8f98);
+}
+
+.expiredBadge {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.25);
+  white-space: nowrap;
+}
+
 .search::placeholder {
   color: var(--text-secondary, #8a8f98);
 }

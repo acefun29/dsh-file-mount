@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import { foldMounts } from './mounted-files.ts'
+import { foldMounts, freshnessLevel } from './mounted-files.ts'
 import { formatRange } from '../render.ts'
 import css from './MountedFilesView.module.css'
 
@@ -15,6 +15,19 @@ const CNY_PER_MILLION_TOKENS = 1
 
 function mountedLines(mount: { ranges: { start: number; end: number }[] }): number {
   return mount.ranges.reduce((n, range) => n + (range.end - range.start + 1), 0)
+}
+
+/** Map a freshness level to its locale key (typed lookup). */
+const LEVEL_KEYS = {
+  fresh: 'freshness.fresh',
+  ok: 'freshness.ok',
+  warn: 'freshness.warn',
+  expired: 'freshness.expired',
+  unknown: 'freshness.unknown',
+} as const
+
+function levelKey(level: keyof typeof LEVEL_KEYS) {
+  return LEVEL_KEYS[level]
 }
 
 /**
@@ -29,6 +42,8 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
   const mounts = useMemo(() => foldMounts(nodes), [nodes])
   const [query, setQuery] = useState('')
   const [sortBy, setSortBy] = useState<'net' | 'path'>('net')
+  // Freshness segment rows are expanded by default; clicking collapses one file.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
 
   const netTotal = useMemo(
     () => mounts.reduce((total, mount) => total + mount.savedTokens - mount.spentTokens, 0),
@@ -79,9 +94,29 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
       {visible.map((mount) => {
         const lines = mountedLines(mount)
         const pct = mount.totalLines > 0 ? Math.min(100, Math.round((lines / mount.totalLines) * 100)) : 0
+        const isCollapsed = collapsed.has(mount.path)
+        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, mount.freshnessThreshold))
+        const worst = levels.includes('expired') ? 'expired' : levels.includes('warn') ? 'warn' : levels.includes('ok') ? 'ok' : 'fresh'
         return (
           <div key={mount.path} className={css.row} data-mount-row data-mount-kind={mount.mountKind}>
-            <div className={css.path} title={mount.path}>{mount.path}</div>
+            <div className={css.pathRow}>
+              <button
+                type="button"
+                className={css.expand}
+                data-mount-expand
+                aria-expanded={!isCollapsed}
+                onClick={() => {
+                  const next = new Set(collapsed)
+                  if (isCollapsed) next.delete(mount.path)
+                  else next.add(mount.path)
+                  setCollapsed(next)
+                }}
+              >
+                {isCollapsed ? '▸' : '▾'}
+              </button>
+              <div className={css.path} title={mount.path}>{mount.path}</div>
+              <span className={css.freshnessDot + ' ' + css['freshnessDot_' + worst]} data-mount-file-freshness={worst} />
+            </div>
             <div className={css.progress} data-mount-progress role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
               <div className={css.progressFill} style={{ width: `${pct}%` }} />
             </div>
@@ -97,6 +132,21 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
                 <span className={css.changed} data-mount-changed>{t('row.changed')}</span>
               )}
             </div>
+            {!isCollapsed && mount.ranges.map((seg, i) => {
+              const level = freshnessLevel(seg.born, mount.contextL, mount.freshnessThreshold)
+              return (
+                <div key={i} className={css.segment} data-mount-segment data-freshness={level}>
+                  <span className={css.segmentBar + ' ' + css['segmentBar_' + level]} />
+                  <span className={css.segmentRange}>{formatRange(seg.start, seg.end)}</span>
+                  <span className={css.segmentLevel}>{t(levelKey(level))}</span>
+                  {seg.expired > 0 && (
+                    <span className={css.expiredBadge} data-mount-expired-badge title={t('freshness.expiredTitle')}>
+                      {t('freshness.expiredBadge').replace('{n}', String(seg.expired))}
+                    </span>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )
       })}

@@ -20,6 +20,13 @@ export type FileMountKey =
   | 'summary.cny'
   | 'row.net'
   | 'row.changed'
+  | 'freshness.fresh'
+  | 'freshness.ok'
+  | 'freshness.warn'
+  | 'freshness.expired'
+  | 'freshness.unknown'
+  | 'freshness.expiredBadge'
+  | 'freshness.expiredTitle'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -45,6 +52,13 @@ export const zh: Record<FileMountKey, string> = {
   'summary.cny': '（约 ¥{n}）',
   'row.net': '净节省 ≈ {n} tokens',
   'row.changed': '文件已变更，已重挂',
+  'freshness.fresh': '新鲜',
+  'freshness.ok': '一般',
+  'freshness.warn': '接近过期',
+  'freshness.expired': '已过期',
+  'freshness.unknown': '未知',
+  'freshness.expiredBadge': '过期 ×{n}',
+  'freshness.expiredTitle': '该段已过期过 N 次；重新读取后恢复新鲜，历史计数保留',
 }
 
 /** English dictionary. */
@@ -64,4 +78,11 @@ export const en: Record<FileMountKey, string> = {
   'summary.cny': '(≈ ¥{n})',
   'row.net': 'net ≈ {n} tokens',
   'row.changed': 'changed, remounted',
+  'freshness.fresh': 'fresh',
+  'freshness.ok': 'aging',
+  'freshness.warn': 'stale',
+  'freshness.expired': 'expired',
+  'freshness.unknown': 'unknown',
+  'freshness.expiredBadge': 'expired ×{n}',
+  'freshness.expiredTitle': 'This segment expired N times; a re-read refreshes it but keeps the count',
 }
