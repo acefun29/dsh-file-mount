@@ -24,6 +24,8 @@ export interface SegmentMeta {
   /** Context position (input tokens) at mount time; undefined when unknown
    * (pre-freshness messages or no usage data on the session). */
   born?: number
+  /** Estimated token count of this segment (for U-score volume protection); undefined for legacy/unknown. */
+  tokens?: number
   /** Times this content expired and was re-read; never resets. */
   expired: number
 }

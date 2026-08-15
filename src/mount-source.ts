@@ -21,11 +21,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Validate one mounted ledger segment: geometry required, meta optional. */
 function isValidLedgerSegment(value: unknown): value is LedgerSegment {
   if (!isRecord(value)) return false
-  const { start, end, born, expired } = value
+  const { start, end, born, tokens, expired } = value
   if (typeof start !== 'number' || typeof end !== 'number'
     || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
     || start < 1 || end < start) return false
   if (born !== undefined && (typeof born !== 'number' || !Number.isSafeInteger(born) || born < 0)) return false
+  if (tokens !== undefined && (typeof tokens !== 'number' || !Number.isSafeInteger(tokens) || tokens < 0)) return false
   if (expired !== undefined && (typeof expired !== 'number' || !Number.isSafeInteger(expired) || expired < 0)) return false
   return true
 }
@@ -41,9 +42,10 @@ function saturatingAdd(a: number, b: number): number {
 }
 
 /**
- * Normalize ledger segments: sort ascending, merge overlapping/touching
- * ranges, carrying freshness metadata across merges (earliest born wins,
- * expired counts add up to the max).
+ * Normalize ledger segments: sort ascending, merge overlapping ranges (newer
+ * mount's born wins). Adjacent ranges merge ONLY when their born values are
+ * identical (or both unknown) so a newly refreshed born is not swallowed by
+ * an older neighbor.
  */
 export function normalizeLedger(segments: readonly LedgerSegment[]): LedgerSegment[] {
   if (segments.length === 0) return []
@@ -58,12 +60,17 @@ export function normalizeLedger(segments: readonly LedgerSegment[]): LedgerSegme
       // never goes backwards.
       cur.end = Math.max(cur.end, seg.end)
       if (seg.born !== undefined) cur.born = seg.born
+      if (seg.tokens !== undefined) cur.tokens = seg.tokens
       if (seg.expired > cur.expired) cur.expired = seg.expired
-    } else if (seg.start === cur.end + 1) {
-      // ADJACENT: two distinct ranges merge into one; the earliest born is the
-      // conservative freshness for the merged range.
+    } else if (
+      seg.start === cur.end + 1
+      && ((cur.born === undefined && seg.born === undefined) || (cur.born !== undefined && seg.born !== undefined && cur.born === seg.born))
+    ) {
+      // ADJACENT: merge only when born is identical or both unknown (Section 5/8).
       cur.end = seg.end
-      if (seg.born !== undefined && (cur.born === undefined || seg.born < cur.born)) cur.born = seg.born
+      if (cur.tokens !== undefined || seg.tokens !== undefined) {
+        cur.tokens = (cur.tokens ?? 0) + (seg.tokens ?? 0)
+      }
       if (seg.expired > cur.expired) cur.expired = seg.expired
     } else {
       out.push(cur)
@@ -116,6 +123,7 @@ export function parseMountSource(source: unknown): ParsedMountSource | undefined
         start: seg.start,
         end: seg.end,
         ...seg.born !== undefined ? { born: seg.born } : {},
+        ...seg.tokens !== undefined ? { tokens: seg.tokens } : {},
         expired: seg.expired ?? 0,
       }))),
       savedTokens: nonNegative(savedTokens),
@@ -165,21 +173,66 @@ export interface PruneResult {
   history: ExpiredSegment[]
 }
 
+export interface FreshnessOptions {
+  lambda?: number
+  alpha?: number
+  Wmax?: number
+}
+
+export const DEFAULT_FRESHNESS_CONFIG = {
+  threshold: 0.4,
+  lambda: 0.7,
+  alpha: 0.5,
+  Wmax: 0.5,
+  valveReads: 2,
+} as const
+
 /**
- * Lazy freshness check (attention-decay plan): a segment is expired when its
- * drift from the context tail passes the threshold — r = (L - born) / L with
- * L the current context length (latest request FULL prompt tokens: uncached
- * input + cacheRead + cacheWrite — DSH counts are disjoint). Expired
- * segments leave the ledger (they stop deduping; the next read re-sends them)
- * and their expired count moves into the history. Segments without a born
- * (no usage data yet, or pre-freshness messages) are never pruned.
+ * Calculate the U-shaped attention freshness score for one ledger segment.
+ * Score = A_bar * W
+ * A(p) = 1 - 4 * lambda * p * (1 - p)
+ * A_bar = (A(p1) + 4 * A(pm) + A(p2)) / 6 (Simpson's exact integral)
+ * W = 1 + min(alpha * sqrt(eta), Wmax) where eta = min(1, S / L)
+ */
+export function calculateFreshnessScore(
+  born: number,
+  contextL: number,
+  tokens?: number,
+  options?: FreshnessOptions,
+): number {
+  if (contextL < 1) return 1
+  const lambda = options?.lambda ?? DEFAULT_FRESHNESS_CONFIG.lambda
+  const alpha = options?.alpha ?? DEFAULT_FRESHNESS_CONFIG.alpha
+  const Wmax = options?.Wmax ?? DEFAULT_FRESHNESS_CONFIG.Wmax
+
+  const S = (tokens !== undefined && tokens > 0) ? tokens : 0
+  const p1 = Math.max(0, (born - S) / contextL)
+  const p2 = Math.min(1, born / contextL)
+  const pm = (p1 + p2) / 2
+
+  const A = (p: number) => 1 - 4 * lambda * p * (1 - p)
+  const A_bar = (A(p1) + 4 * A(pm) + A(p2)) / 6
+
+  const eta = Math.min(1, S / contextL)
+  const W = 1 + Math.min(alpha * Math.sqrt(eta), Wmax)
+
+  return A_bar * W
+}
+
+/**
+ * Lazy freshness check (U-score attention model): a segment is expired when
+ * its U-score dips below threshold (Score < freshnessThreshold).
+ * Expired segments leave the ledger (they stop deduping; the next read re-sends
+ * them) and their expired count moves into the history. Segments without a born
+ * (no usage data yet, or pre-freshness messages) or with born >= contextL are never pruned.
  */
 export function pruneExpired(
   segments: readonly LedgerSegment[],
   contextL: number | undefined,
-  threshold: number,
+  threshold: number = DEFAULT_FRESHNESS_CONFIG.threshold,
+  options?: FreshnessOptions,
 ): PruneResult {
-  if (contextL === undefined || contextL < 1 || threshold >= 1) {
+  if (contextL === undefined || contextL < 1) {
     return { active: [...segments], history: [] }
   }
   const active: LedgerSegment[] = []
@@ -190,8 +243,8 @@ export function pruneExpired(
       active.push(seg)
       continue
     }
-    const drift = (contextL - seg.born) / contextL
-    if (drift > threshold) history.push({ start: seg.start, end: seg.end, expired: seg.expired + 1 })
+    const score = calculateFreshnessScore(seg.born, contextL, seg.tokens, options)
+    if (score < threshold) history.push({ start: seg.start, end: seg.end, expired: seg.expired + 1 })
     else active.push(seg)
   }
   return { active, history }
