@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { foldMounts, freshnessLevel } from '../../src/client/mounted-files.ts'
+import { MountFold, foldMounts, freshnessLevel } from '../../src/client/mounted-files.ts'
 
 function contextNode(source: Record<string, unknown>, seq = 1, time = 1000): ContextMessageNode {
   return {
@@ -167,5 +167,65 @@ describe('foldMounts freshness', () => {
     // born 900 at L 1000 -> drift 0.10 -> fresh; the uncached-only 200 would
     // have made the same segment "impossibly fresh" forever.
     expect(freshnessLevel(900, mounts[0]!.contextL)).toBe('fresh')
+  })
+})
+
+describe('MountFold (paginated history window)', () => {
+  it('keeps entries whose mount messages scroll out of the loaded window', () => {
+    const fold = new MountFold()
+    const early = contextNode(mountSource({
+      path: 'src/a.ts',
+      mounted: [{ start: 1, end: 50 }],
+      added: [{ start: 1, end: 50 }],
+    }), 1)
+    const late = contextNode(mountSource({
+      path: 'src/b.ts',
+      mounted: [{ start: 1, end: 2 }],
+      added: [{ start: 1, end: 2 }],
+    }), 2)
+    expect(fold.fold('s1', [early, late]).map((m) => m.path)).toEqual(['src/a.ts', 'src/b.ts'])
+    // The window truncates at the head: only b.ts is delivered now, but the
+    // fold remembers a.ts (its message simply scrolled out of the window).
+    const views = fold.fold('s1', [late])
+    expect(views.map((m) => m.path)).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(views[0]!.ranges).toEqual([{ start: 1, end: 50, expired: 0 }])
+  })
+
+  it('resets when the conversation changes', () => {
+    const fold = new MountFold()
+    fold.fold('s1', [contextNode(mountSource(), 1)])
+    expect(fold.fold('s2', [])).toEqual([])
+  })
+
+  it('folds re-delivered messages exactly once (no double token counts)', () => {
+    const fold = new MountFold()
+    const nodes = [
+      contextNode(mountSource(), 1),
+      contextNode(mountSource({ added: [], mountKind: 'dedup', savedTokens: 5 }), 2),
+    ]
+    fold.fold('s1', nodes)
+    const views = fold.fold('s1', nodes)
+    expect(views).toHaveLength(1)
+    expect(views[0]!.savedTokens).toBe(5)
+  })
+
+  it('re-derives a path in seq order when older messages arrive after newer ones (page up)', () => {
+    const fold = new MountFold()
+    // The window first delivers only the newer remount (hash h2); a later
+    // page-up delivers the older anchor (hash h1) BEFORE it in seq. The
+    // final state must stay h2 — arrival order must not overwrite it.
+    const remount = contextNode(mountSource({
+      hash: 'h2',
+      totalLines: 120,
+      mounted: [{ start: 1, end: 20 }],
+      added: [{ start: 1, end: 20 }],
+      mountKind: 'remount',
+    }), 9)
+    fold.fold('s1', [remount])
+    const views = fold.fold('s1', [contextNode(mountSource(), 1), remount])
+    expect(views).toHaveLength(1)
+    expect(views[0]!.hash).toBe('h2')
+    expect(views[0]!.totalLines).toBe(120)
+    expect(views[0]!.ranges).toEqual([{ start: 1, end: 20, expired: 0 }])
   })
 })
