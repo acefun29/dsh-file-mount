@@ -53,7 +53,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
 5. Compaction awareness: canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are skipped.
 6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read).
-7. **Freshness (attention decay)**: every mounted segment records its context position at mount time (last request input tokens + block estimate); per-request usage advances the current context length, and a segment's drift from the context tail maps to a display level (tail attention zone = fresh, past the threshold = expired). **Expired segments leave the ledger** (the next read re-sends them — tokens spent for reliability) and the count is kept: a re-mount inherits expired+1, shown as a badge. No timers: expiry checks only run lazily on reads.
+7. **Freshness (attention decay)**: every mounted segment records its context position at mount time (last request FULL input tokens — uncached + cacheRead + cacheWrite; DSH usage counts are disjoint, `inputTokens` alone is the uncached portion only — plus the block estimate); per-request usage advances the current context length, and a segment's drift from the context tail maps to a display level (tail attention zone = fresh, past the threshold = expired). **Expired segments leave the ledger** (the next read re-sends them — tokens spent for reliability) and the count is kept: a re-mount inherits expired+1, shown as a badge. No timers: expiry checks only run lazily on reads.
 
 Path identity: absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold).
 
@@ -65,6 +65,7 @@ Path identity: absolute path + `realpath` (symlinks unify to the real file) + ca
 - Files over `maxManagedBytes` and `excludeGlobs` matches are not managed (no sampling — a sampled fingerprint risks missing a change and falsely deduping).
 - Custom session event types cannot persist safely on rc.6, so the ledger rides structured source fields on standard events.
 - Freshness is heuristic: expiry does not mean the content left the context (only compaction does) — it means attention decayed past usefulness, so re-sending is a deliberate token cost. Sessions without usage data show grey "unknown" and never expire.
+- The browser conversation is a paginated history window (tail page of 50 messages by default; earlier pages load on scroll-up); the dashboard fold accumulates across snapshot revisions, so files whose mount messages scroll out of the window stay listed. Compaction-shadowed mounts are dropped host-side, but the browser has no shadow list — the row persists until the file is next re-mounted.
 - Dashboard "jump to conversation", the cross-session totals UI, and live "file changed" hints are deferred (no browser-side channel).
 
 ## FAQ
