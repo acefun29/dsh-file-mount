@@ -138,7 +138,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
         const lines = mountedLines(mount)
         const pct = mount.totalLines > 0 ? Math.min(100, Math.round((lines / mount.totalLines) * 100)) : 0
         const isCollapsed = collapsed.has(mount.path)
-        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, effectiveThreshold))
+        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens))
         const worst = levels.includes('expired') ? 'expired' : levels.includes('warn') ? 'warn' : levels.includes('ok') ? 'ok' : 'fresh'
         return (
           <div key={mount.path} className={css.row} data-mount-row data-mount-kind={mount.mountKind}>
@@ -176,7 +176,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
               )}
             </div>
             {!isCollapsed && mount.ranges.map((seg, i) => {
-              const level = freshnessLevel(seg.born, mount.contextL, effectiveThreshold)
+              const level = freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens)
               return (
                 <div key={i} className={css.segment} data-mount-segment data-freshness={level}>
                   <span className={css.segmentBar + ' ' + css['segmentBar_' + level]} />

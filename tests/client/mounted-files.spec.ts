@@ -120,37 +120,53 @@ describe('foldMounts', () => {
 })
 
 describe('freshnessLevel', () => {
-  it('maps drift from the context tail to display levels', () => {
-    expect(freshnessLevel(90, 100)).toBe('fresh')      // drift 0.10
-    expect(freshnessLevel(70, 100)).toBe('ok')         // drift 0.30
-    expect(freshnessLevel(30, 100)).toBe('warn')       // drift 0.70
-    expect(freshnessLevel(5, 100)).toBe('expired')     // drift 0.95
-    expect(freshnessLevel(undefined, 100)).toBe('unknown')
-    expect(freshnessLevel(50, undefined)).toBe('unknown')
+  it('maps U-score attention decay to display levels', () => {
+    // Tail: born 950, L 1000 -> score ≈ 0.867 -> fresh
+    expect(freshnessLevel(950, 1000)).toBe('fresh')
+    // Head: born 50, L 1000 -> score ≈ 0.867 -> fresh (head zone immortality)
+    expect(freshnessLevel(50, 1000)).toBe('fresh')
+    // Near tail: born 800, L 1000 -> p = 0.8 -> score ≈ 0.552 -> ok
+    expect(freshnessLevel(800, 1000)).toBe('ok')
+    // Near threshold: born 750, L 1000 -> p = 0.75 -> score ≈ 0.475 -> warn
+    expect(freshnessLevel(750, 1000)).toBe('warn')
+    // Midpoint: born 500, L 1000 -> p = 0.5 -> score = 0.30 -> expired
+    expect(freshnessLevel(500, 1000)).toBe('expired')
+    expect(freshnessLevel(undefined, 1000)).toBe('unknown')
+    expect(freshnessLevel(500, undefined)).toBe('unknown')
   })
 
   it('respects the configured threshold', () => {
-    expect(freshnessLevel(50, 100, 0.3)).toBe('expired') // drift 0.5 > 0.3
-    expect(freshnessLevel(50, 100, 0.9)).toBe('ok')
+    // born 750, L 1000 -> score = 0.475
+    // With threshold = 0.5: score 0.475 < 0.5 -> expired
+    expect(freshnessLevel(750, 1000, 0.5)).toBe('expired')
+    // With threshold = 0.3: score 0.475 >= 0.3, < 0.85 -> ok
+    expect(freshnessLevel(750, 1000, 0.3)).toBe('ok')
+  })
+
+  it('takes segment tokens into account for volume protection', () => {
+    // Midpoint born 500, L 1000 with S = 0 -> score = 0.3 -> expired
+    expect(freshnessLevel(500, 1000, 0.4)).toBe('expired')
+    // Midpoint with giant tokens S = 450 -> score >= 0.40 -> warn or ok
+    expect(freshnessLevel(725, 1000, 0.4, 450)).not.toBe('expired')
   })
 })
 
 describe('freshness tiers', () => {
-  it('maps each tier id to its threshold (drift past it counts as expired)', () => {
-    expect(tierOf('lenient')).toBe(0.95)
-    expect(tierOf('standard')).toBe(0.85)
-    expect(tierOf('sensitive')).toBe(0.7)
+  it('maps each tier id to its threshold (U-score below it counts as expired)', () => {
+    expect(tierOf('lenient')).toBe(0.2)
+    expect(tierOf('standard')).toBe(0.3)
+    expect(tierOf('sensitive')).toBe(0.4)
     expect(tierOf('aggressive')).toBe(0.5)
     expect(FRESHNESS_TIERS).toHaveLength(4)
   })
 
   it('picks the nearest tier for an arbitrary threshold', () => {
-    expect(nearestTier(0.95)).toBe('lenient')
-    expect(nearestTier(0.86)).toBe('standard')
-    expect(nearestTier(0.72)).toBe('sensitive')
-    expect(nearestTier(0.52)).toBe('aggressive')
-    expect(nearestTier(1)).toBe('lenient')
-    expect(nearestTier(0)).toBe('aggressive')
+    expect(nearestTier(0.2)).toBe('lenient')
+    expect(nearestTier(0.31)).toBe('standard')
+    expect(nearestTier(0.42)).toBe('sensitive')
+    expect(nearestTier(0.49)).toBe('aggressive')
+    expect(nearestTier(0)).toBe('lenient')
+    expect(nearestTier(1)).toBe('aggressive')
   })
 })
 
@@ -187,12 +203,11 @@ describe('foldMounts freshness', () => {
     // prefix is cacheReadTokens — the full prompt is their sum.
     const mounts = foldMounts([
       assistantNode(1, 200, 800),
-      contextNode(mountSource({ mounted: [{ start: 1, end: 50, born: 900, expired: 0 }] }), 2),
+      contextNode(mountSource({ mounted: [{ start: 1, end: 50, born: 950, expired: 0 }] }), 2),
     ])
     expect(mounts[0]!.contextL).toBe(1000)
-    // born 900 at L 1000 -> drift 0.10 -> fresh; the uncached-only 200 would
-    // have made the same segment "impossibly fresh" forever.
-    expect(freshnessLevel(900, mounts[0]!.contextL)).toBe('fresh')
+    // born 950 at L 1000 -> score > 0.85 -> fresh.
+    expect(freshnessLevel(950, mounts[0]!.contextL)).toBe('fresh')
   })
 })
 

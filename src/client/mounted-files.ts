@@ -21,8 +21,15 @@
  */
 import type { ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
 import type { LedgerSegment } from '../types.ts'
-import { applyMountState, parseMountSource, type MountDelta, type MountState } from '../mount-source.ts'
-
+import {
+  applyMountState,
+  calculateFreshnessScore,
+  DEFAULT_FRESHNESS_CONFIG,
+  parseMountSource,
+  type FreshnessOptions,
+  type MountDelta,
+  type MountState,
+} from '../mount-source.ts'
 /** One mounted file as the view presents it. */
 export interface MountedFileView {
   /** Normalized absolute path (ledger identity). */
@@ -55,12 +62,11 @@ export type FreshnessLevel = 'fresh' | 'ok' | 'warn' | 'expired' | 'unknown'
  * the threshold counts a segment as expired; higher = more lenient).
  */
 export const FRESHNESS_TIERS = [
-  { id: 'lenient', threshold: 0.95 },
-  { id: 'standard', threshold: 0.85 },
-  { id: 'sensitive', threshold: 0.7 },
+  { id: 'lenient', threshold: 0.2 },
+  { id: 'standard', threshold: 0.3 },
+  { id: 'sensitive', threshold: 0.4 },
   { id: 'aggressive', threshold: 0.5 },
 ] as const
-
 /** Tier ids, in picker order. */
 export type FreshnessTierId = (typeof FRESHNESS_TIERS)[number]['id']
 
@@ -73,7 +79,7 @@ export function tierOf(id: FreshnessTierId): number {
 
 /** The tier whose threshold is closest to the given value (ties → earlier). */
 export function nearestTier(threshold: number): FreshnessTierId {
-  let best: (typeof FRESHNESS_TIERS)[number] = FRESHNESS_TIERS[1]!
+  let best: (typeof FRESHNESS_TIERS)[number] = FRESHNESS_TIERS[2]!
   let bestDistance = Infinity
   for (const tier of FRESHNESS_TIERS) {
     const distance = Math.abs(tier.threshold - threshold)
@@ -98,14 +104,16 @@ export interface FreshnessSettingsApi {
 export function freshnessLevel(
   born: number | undefined,
   contextL: number | undefined,
-  threshold = 0.85,
+  threshold = DEFAULT_FRESHNESS_CONFIG.threshold,
+  tokens?: number,
+  options?: FreshnessOptions,
 ): FreshnessLevel {
   if (born === undefined || contextL === undefined || contextL < 1) return 'unknown'
   if (born >= contextL) return 'fresh'
-  const drift = (contextL - born) / contextL
-  if (drift > threshold) return 'expired'
-  if (drift > 0.5) return 'warn'
-  if (drift > 0.15) return 'ok'
+  const score = calculateFreshnessScore(born, contextL, tokens, options)
+  if (score < threshold) return 'expired'
+  if (score < threshold + 0.15) return 'warn'
+  if (score < 0.85) return 'ok'
   return 'fresh'
 }
 
@@ -148,9 +156,8 @@ export class MountFold {
   private sessionId: string | undefined
   private readonly paths = new Map<string, StoredMount[]>()
   private readonly folded = new Set<number>()
-  private lastThreshold = 0.85
+  private lastThreshold = DEFAULT_FRESHNESS_CONFIG.threshold
   private lastThresholdSeq = -1
-
   /**
    * Fold one snapshot revision (ascending seq) into the persistent state.
    * @param sessionId - owning conversation; a change resets the fold.
@@ -162,7 +169,7 @@ export class MountFold {
       this.sessionId = sessionId
       this.paths.clear()
       this.folded.clear()
-      this.lastThreshold = 0.85
+      this.lastThreshold = DEFAULT_FRESHNESS_CONFIG.threshold
       this.lastThresholdSeq = -1
     }
     let contextL: number | undefined

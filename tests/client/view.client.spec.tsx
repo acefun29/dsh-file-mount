@@ -137,13 +137,13 @@ describe('MountedFilesView', () => {
           path: 'src/a.ts',
           hash: 'abcdef0123456789',
           totalLines: 100,
-          // born 200 at L 1000 -> drift 0.8: warn at the default 0.85,
+          // born 750 at L 1000 -> score 0.475: warn at the default 0.4,
           // expired at the aggressive 0.5 tier.
-          mounted: [{ start: 1, end: 50, born: 200, expired: 0 }],
+          mounted: [{ start: 1, end: 50, born: 750, expired: 0 }],
           added: [{ start: 1, end: 50 }],
           mountKind: 'new',
           savedTokens: 0,
-          freshnessThreshold: 0.85,
+          freshnessThreshold: 0.4,
         },
         provenance: { role: 'inject', label: 'file-mount' },
         form: null,
@@ -153,8 +153,8 @@ describe('MountedFilesView', () => {
     const { container } = render(<MountedFilesView {...viewProps(nodes)} api={api} />)
     const dot = container.querySelector('[data-mount-file-freshness]')
     expect(dot?.getAttribute('data-mount-file-freshness')).toBe('warn')
-    // The picker defaults to the tier nearest the folded threshold (0.85).
-    expect((container.querySelector('[data-mount-tier]') as HTMLSelectElement).value).toBe('standard')
+    // The picker defaults to the tier nearest the folded threshold (0.4 = sensitive).
+    expect((container.querySelector('[data-mount-tier]') as HTMLSelectElement).value).toBe('sensitive')
     // Switch to the aggressive tier: the level flips to expired immediately
     // and the new threshold is pushed through the settings api.
     const select = container.querySelector('[data-mount-tier]') as HTMLSelectElement
