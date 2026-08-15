@@ -4,11 +4,22 @@
 import { useMemo, useRef, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import { MountFold, freshnessLevel } from './mounted-files.ts'
+import {
+  FRESHNESS_TIERS,
+  MountFold,
+  freshnessLevel,
+  nearestTier,
+  tierOf,
+  type FreshnessSettingsApi,
+  type FreshnessTierId,
+} from './mounted-files.ts'
 import { formatRange } from '../render.ts'
 import css from './MountedFilesView.module.css'
 
-export type MountedFilesViewProps = ConvViewProps & PropsLocale<'file-mount'>
+export type MountedFilesViewProps = ConvViewProps & PropsLocale<'file-mount'> & {
+  /** Host settings face for the tier picker (absent in environments without a connection). */
+  api?: FreshnessSettingsApi
+}
 
 /** Rough conversion for the savings figure: yuan per one million tokens. */
 const CNY_PER_MILLION_TOKENS = 1
@@ -39,7 +50,7 @@ function levelKey(level: keyof typeof LEVEL_KEYS) {
  * @param props - slot standard kit (useSession) plus the view locale seat.
  * @returns the mounted-files dashboard, or the localized empty hint.
  */
-export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
+export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) {
   const sessionId = useSession((snapshot) => snapshot.sessionId)
   const nodes = useSession((snapshot) => snapshot.nodes)
   const foldRef = useRef<MountFold | undefined>(undefined)
@@ -51,6 +62,12 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
   const [sortBy, setSortBy] = useState<'net' | 'path'>('net')
   // Freshness segment rows are expanded by default; clicking collapses one file.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  // User-chosen freshness tier (null = follow the threshold the host stamped).
+  const [tierId, setTierId] = useState<FreshnessTierId | null>(null)
+  // The threshold the host stamped on the latest mount source (follows the
+  // host settings, which the picker itself updates through the api).
+  const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.85
+  const effectiveThreshold = tierId === null ? foldedThreshold : tierOf(tierId)
 
   const netTotal = useMemo(
     () => mounts.reduce((total, mount) => total + mount.savedTokens - mount.spentTokens, 0),
@@ -97,12 +114,31 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
           <option value="net">{t('list.sortNet')}</option>
           <option value="path">{t('list.sortPath')}</option>
         </select>
+        <select
+          className={css.sort}
+          data-mount-tier
+          title={t('tier.label')}
+          aria-label={t('tier.label')}
+          value={tierId ?? nearestTier(foldedThreshold)}
+          onChange={(event) => {
+            const id = event.target.value as FreshnessTierId
+            setTierId(id)
+            // Push to the host: the settings namespace update persists and
+            // re-stamps future mount sources; the local override already
+            // re-renders this view immediately.
+            api?.update({ ns: 'file-mount', patch: { freshnessThreshold: tierOf(id) } }).catch(() => {})
+          }}
+        >
+          {FRESHNESS_TIERS.map((tier) => (
+            <option key={tier.id} value={tier.id}>{t(`tier.${tier.id}`)}</option>
+          ))}
+        </select>
       </div>
       {visible.map((mount) => {
         const lines = mountedLines(mount)
         const pct = mount.totalLines > 0 ? Math.min(100, Math.round((lines / mount.totalLines) * 100)) : 0
         const isCollapsed = collapsed.has(mount.path)
-        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, mount.freshnessThreshold))
+        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, effectiveThreshold))
         const worst = levels.includes('expired') ? 'expired' : levels.includes('warn') ? 'warn' : levels.includes('ok') ? 'ok' : 'fresh'
         return (
           <div key={mount.path} className={css.row} data-mount-row data-mount-kind={mount.mountKind}>
@@ -140,7 +176,7 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
               )}
             </div>
             {!isCollapsed && mount.ranges.map((seg, i) => {
-              const level = freshnessLevel(seg.born, mount.contextL, mount.freshnessThreshold)
+              const level = freshnessLevel(seg.born, mount.contextL, effectiveThreshold)
               return (
                 <div key={i} className={css.segment} data-mount-segment data-freshness={level}>
                   <span className={css.segmentBar + ' ' + css['segmentBar_' + level]} />

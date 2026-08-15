@@ -12,6 +12,11 @@ export type FileMountKey =
   | 'list.searchPlaceholder'
   | 'list.sortNet'
   | 'list.sortPath'
+  | 'tier.label'
+  | 'tier.lenient'
+  | 'tier.standard'
+  | 'tier.sensitive'
+  | 'tier.aggressive'
   | 'kind.new'
   | 'kind.increment'
   | 'kind.remount'
@@ -44,6 +49,11 @@ export const zh: Record<FileMountKey, string> = {
   'list.searchPlaceholder': '搜索路径…',
   'list.sortNet': '按净节省排序',
   'list.sortPath': '按路径排序',
+  'tier.label': '新鲜度阈值',
+  'tier.lenient': '宽松',
+  'tier.standard': '标准',
+  'tier.sensitive': '敏感',
+  'tier.aggressive': '激进',
   'kind.new': '新挂载',
   'kind.increment': '增量',
   'kind.remount': '重挂载',
@@ -70,6 +80,11 @@ export const en: Record<FileMountKey, string> = {
   'list.searchPlaceholder': 'Search paths…',
   'list.sortNet': 'Sort by net savings',
   'list.sortPath': 'Sort by path',
+  'tier.label': 'Freshness threshold',
+  'tier.lenient': 'Lenient',
+  'tier.standard': 'Standard',
+  'tier.sensitive': 'Sensitive',
+  'tier.aggressive': 'Aggressive',
   'kind.new': 'new',
   'kind.increment': 'increment',
   'kind.remount': 'remount',
