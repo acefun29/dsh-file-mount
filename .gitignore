@@ -7,8 +7,7 @@ lib/
 .env
 *.tgz
 
-# 根目录非 readme 文档（计划 / 方案草稿）不提交
-/*.md
+# 整个项目目录的文档（指南 / 方案草稿 / 规则等）一律不提交，只留 readme
+*.md
 !/README.md
 !/README.en.md
-!AGENTS.md
