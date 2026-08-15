@@ -173,7 +173,12 @@ export class FileMountService extends Service {
   private readonly excludeGlobs: readonly string[]
   private readonly statsFile: string | undefined
   private readonly freshnessEnabled: boolean
-  private readonly freshnessThreshold: number
+  /** Config-provided threshold (the settings namespace's base layer). */
+  private readonly configuredFreshnessThreshold: number
+  /** Effective freshness threshold: the settings namespace value when the
+   * host provides one (runtime-adjustable from the dashboard tier picker),
+   * the config value otherwise. */
+  private freshnessThreshold: number
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'fileMount')
@@ -184,7 +189,8 @@ export class FileMountService extends Service {
     this.excludeGlobs = resolved.excludeGlobs ?? []
     this.statsFile = resolved.statsFile
     this.freshnessEnabled = resolved.freshnessEnabled ?? true
-    this.freshnessThreshold = resolved.freshnessThreshold ?? 0.85
+    this.configuredFreshnessThreshold = resolved.freshnessThreshold ?? 0.85
+    this.freshnessThreshold = this.configuredFreshnessThreshold
     this.cache = new FileContentCache({
       ...resolved.capacity !== undefined ? { capacity: resolved.capacity } : {},
       ...resolved.ttlMs !== undefined ? { ttlMs: resolved.ttlMs } : {},
@@ -193,6 +199,7 @@ export class FileMountService extends Service {
     })
 
     this.registerForgetTool(ctx)
+    this.wireFreshnessSettings(ctx)
 
     ctx.on('agent/session-start', ({ agent, source }) => {
       if (source === 'resume') void this.kickoffRestore(agent).catch(() => {})
@@ -242,6 +249,62 @@ export class FileMountService extends Service {
       // A mount decision must never fail a read: fall back to the native result.
       return downstream
     }
+  }
+
+  /**
+   * Optional settings seam (duck-typed; dsh-settings is not a peer dep): when
+   * the host provides a `settings` service, register the 'file-mount'
+   * namespace with the config value as its base layer, so the dashboard's
+   * freshness tier picker can change the effective threshold at runtime
+   * (persisted by the provider, applied here immediately, and stamped on
+   * every mount source). Without a settings service this is a no-op and the
+   * config value stays authoritative.
+   *
+   * Deliberately NO `ctx.inject`/child fiber: creating one from inside the
+   * service constructor wedges later fiber starts (observed in the
+   * integration harness). Instead the seam attaches eagerly when the service
+   * already exists, and otherwise listens for the provider's
+   * `internal/service` binding event on the root context.
+   */
+  private wireFreshnessSettings(ctx: Context): void {
+    type ScopeShape = {
+      get(): { freshnessThreshold?: number }
+      watch(callback: () => void): () => void
+    }
+    type SettingsShape = {
+      register(ns: string, schema: unknown, options?: { base?: unknown }): ScopeShape
+    }
+    let scope: ScopeShape | undefined
+    let watchDispose: (() => void) | undefined
+    const attach = (): void => {
+      if (scope !== undefined) return
+      const settings = (ctx.get('settings') as SettingsShape | undefined)
+      if (settings === undefined) return
+      scope = settings.register('file-mount', z.object({
+        freshnessThreshold: z.number().step(0.01).min(0).max(1).default(this.configuredFreshnessThreshold),
+      }), { base: { freshnessThreshold: this.configuredFreshnessThreshold } })
+      const apply = (): void => {
+        const value = scope!.get().freshnessThreshold
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          this.freshnessThreshold = value
+        }
+      }
+      apply()
+      watchDispose = scope.watch(apply)
+    }
+    attach()
+    // A settings provider arriving after boot (or on a sibling fiber) emits
+    // 'internal/service' on the root context; the listener is removed with
+    // the plugin fiber's teardown effect.
+    const off = ctx.root.on('internal/service', (name: string) => {
+      if (name === 'settings') attach()
+    })
+    ctx.effect(() => () => {
+      off()
+      watchDispose?.()
+      scope = undefined
+      watchDispose = undefined
+    }, 'file-mount: freshness settings seam')
   }
 
   /** Register the model-facing "return the book" tool (plan item 25). */
