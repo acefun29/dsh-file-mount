@@ -25,28 +25,28 @@ function mountRecord(source: Record<string, unknown>): LedgerRecord {
 describe('MountStore', () => {
   it('mounts a new file', () => {
     const store = new MountStore()
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0 })
-    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0, spentTokens: 0 })
-    expect(store.mountedSegments('a.ts')).toEqual([{ start: 1, end: 50 }])
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0 , expiredHistory: [] })
+    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50, expired: 0 }], savedTokens: 0, spentTokens: 0, expiredHistory: [] })
+    expect(store.mountedSegments('a.ts')).toEqual([{ start: 1, end: 50, expired: 0 }])
   })
 
   it('unions ranges on the same hash', () => {
     const store = new MountStore()
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0 })
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 40, end: 80 }], savedTokens: 0 })
-    expect(store.mountedSegments('a.ts')).toEqual([{ start: 1, end: 80 }])
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0 , expiredHistory: [] })
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 40, end: 80 }], savedTokens: 0 , expiredHistory: [] })
+    expect(store.mountedSegments('a.ts')).toEqual([{ start: 1, end: 80, expired: 0 }])
   })
 
   it('replaces the entry wholesale on a hash change', () => {
     const store = new MountStore()
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 80 }], savedTokens: 0 })
-    store.mount({ absPath: 'a.ts', hash: 'h2', totalLines: 120, segments: [{ start: 1, end: 20 }], savedTokens: 0 })
-    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h2', totalLines: 120, segments: [{ start: 1, end: 20 }], savedTokens: 0, spentTokens: 0 })
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 80 }], savedTokens: 0 , expiredHistory: [] })
+    store.mount({ absPath: 'a.ts', hash: 'h2', totalLines: 120, segments: [{ start: 1, end: 20 }], savedTokens: 0 , expiredHistory: [] })
+    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h2', totalLines: 120, segments: [{ start: 1, end: 20, expired: 0 }], savedTokens: 0, spentTokens: 0, expiredHistory: [] })
   })
 
   it('invalidate drops the entry', () => {
     const store = new MountStore()
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 10, segments: [{ start: 1, end: 10 }], savedTokens: 0 })
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 10, segments: [{ start: 1, end: 10 }], savedTokens: 0 , expiredHistory: [] })
     store.invalidate('a.ts')
     expect(store.get('a.ts')).toBeUndefined()
     expect(store.mountedSegments('a.ts')).toEqual([])
@@ -59,7 +59,7 @@ describe('MountStore', () => {
       mountRecord(mountSource({ mounted: [{ start: 1, end: 80 }], added: [{ start: 51, end: 80 }], mountKind: 'increment' })),
       mountRecord(mountSource({ hash: 'h2', totalLines: 120, mounted: [{ start: 1, end: 20 }], added: [{ start: 1, end: 20 }], mountKind: 'remount' })),
     ])
-    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h2', totalLines: 120, segments: [{ start: 1, end: 20 }], savedTokens: 0, spentTokens: 0 })
+    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h2', totalLines: 120, segments: [{ start: 1, end: 20, expired: 0 }], savedTokens: 0, spentTokens: 0, expiredHistory: [] })
   })
 
   it('ignores foreign messages and malformed sources', () => {
@@ -94,28 +94,28 @@ describe('MountStore', () => {
         mountKind: 'new',
       },
     }])
-    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0, spentTokens: 0 })
+    expect(store.get('a.ts')).toEqual({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50, expired: 0 }], savedTokens: 0, spentTokens: 0, expiredHistory: [] })
   })
 
   it('caps savedTokens at the safe-integer ceiling (saturating)', () => {
     const store = new MountStore()
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 10 }], savedTokens: Number.MAX_SAFE_INTEGER })
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 11, end: 20 }], savedTokens: 1000 })
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 10 }], savedTokens: Number.MAX_SAFE_INTEGER , expiredHistory: [] })
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 11, end: 20 }], savedTokens: 1000 , expiredHistory: [] })
     expect(store.get('a.ts')!.savedTokens).toBe(Number.MAX_SAFE_INTEGER)
   })
 
   it('accumulates spentTokens and keeps it across a hash change', () => {
     const store = new MountStore()
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0, spentTokens: 5 })
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 51, end: 60 }], savedTokens: 10, spentTokens: 7 })
-    store.mount({ absPath: 'a.ts', hash: 'h2', totalLines: 120, segments: [{ start: 1, end: 20 }], savedTokens: 0, spentTokens: 3 })
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 1, end: 50 }], savedTokens: 0, spentTokens: 5 , expiredHistory: [] })
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 100, segments: [{ start: 51, end: 60 }], savedTokens: 10, spentTokens: 7 , expiredHistory: [] })
+    store.mount({ absPath: 'a.ts', hash: 'h2', totalLines: 120, segments: [{ start: 1, end: 20 }], savedTokens: 0, spentTokens: 3 , expiredHistory: [] })
     expect(store.get('a.ts')!.savedTokens).toBe(10)
     expect(store.get('a.ts')!.spentTokens).toBe(15)
   })
 
   it('clear empties the ledger', () => {
     const store = new MountStore()
-    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 10, segments: [{ start: 1, end: 10 }], savedTokens: 0 })
+    store.mount({ absPath: 'a.ts', hash: 'h1', totalLines: 10, segments: [{ start: 1, end: 10 }], savedTokens: 0 , expiredHistory: [] })
     store.clear()
     expect(store.all()).toEqual([])
   })

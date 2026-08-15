@@ -49,8 +49,10 @@ export interface MountedFile {
   hash: string
   /** Line count of the file at hash time. */
   totalLines: number
-  /** Mounted ranges, normalized ascending. */
-  segments: Segment[]
+  /** Mounted ranges, normalized ascending, each carrying freshness metadata. */
+  segments: LedgerSegment[]
+  /** Expired segments retained as history so a re-mount inherits the count. */
+  expiredHistory: ExpiredSegment[]
   /** Cumulative tokens this ledger kept out of the context for this path. */
   savedTokens: number
   /** Cumulative tokens the plugin's own injected notes cost for this path. */
@@ -74,8 +76,8 @@ export interface MountSource {
   hash: string
   /** Line count of the file at hash time. */
   totalLines: number
-  /** Ledger ranges AFTER this mount lands (normalized ascending). */
-  mounted: Segment[]
+  /** Ledger ranges AFTER this mount lands (normalized ascending, with freshness metadata). */
+  mounted: LedgerSegment[]
   /** Ranges this message actually adds (normalized, in-window). */
   added: Segment[]
   /** How the ledger changed: fresh anchor, union, hash-change remount, or dedup. */
@@ -84,4 +86,6 @@ export interface MountSource {
   savedTokens: number
   /** Tokens this message's own note cost (the plugin overhead it injects). */
   spentTokens: number
+  /** Freshness expiry threshold the host configured (for the browser fold). */
+  freshnessThreshold?: number
 }

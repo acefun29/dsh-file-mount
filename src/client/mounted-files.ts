@@ -7,7 +7,7 @@
  * with (plan item 20).
  */
 import type { ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
-import type { Segment } from '../types.ts'
+import type { LedgerSegment } from '../types.ts'
 import { applyMountState, parseMountSource } from '../mount-source.ts'
 
 /** One mounted file as the view presents it. */
@@ -18,8 +18,8 @@ export interface MountedFileView {
   hash: string
   /** Line count of the file at hash time. */
   totalLines: number
-  /** Mounted ranges, normalized ascending. */
-  ranges: Segment[]
+  /** Mounted ranges, normalized ascending, with freshness metadata. */
+  ranges: LedgerSegment[]
   /** How the ledger changed last. */
   mountKind: 'new' | 'increment' | 'remount' | 'dedup'
   /** Cumulative tokens kept out of the context for this path. */

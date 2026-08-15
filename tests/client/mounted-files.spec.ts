@@ -55,7 +55,7 @@ describe('foldMounts', () => {
       contextNode(mountSource({ mounted: [{ start: 1, end: 80 }], added: [{ start: 51, end: 80 }], mountKind: 'increment' }), 2),
     ])
     expect(mounts).toHaveLength(1)
-    expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 80 }])
+    expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 80, expired: 0 }])
     expect(mounts[0]!.mountKind).toBe('increment')
     expect(mounts[0]!.seq).toBe(2)
     expect(mounts[0]!.savedTokens).toBe(0)
@@ -69,7 +69,7 @@ describe('foldMounts', () => {
     expect(mounts).toHaveLength(1)
     expect(mounts[0]!.hash).toBe('h2')
     expect(mounts[0]!.totalLines).toBe(120)
-    expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 20 }])
+    expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 20, expired: 0 }])
     expect(mounts[0]!.mountKind).toBe('remount')
     expect(mounts[0]!.savedTokens).toBe(9)
   })

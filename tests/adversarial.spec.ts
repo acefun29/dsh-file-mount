@@ -34,6 +34,11 @@ function mountMessages(agent: Agent) {
       && source['kind'] === 'plugin' && source['plugin'] === 'file-mount') as unknown as Record<string, unknown>[]
 }
 
+/** Geometry-only view of mounted segments (freshness meta ignored). */
+function geo(segs: readonly { start: number; end: number }[]): { start: number; end: number }[] {
+  return segs.map(({ start, end }) => ({ start, end }))
+}
+
 /** The tool/result content text for one call id. */
 function resultText(agent: Agent, callId: string): string | undefined {
   const event = agent.session.events.find((e) => e.type === 'tool/result' && e.data.message.content[0]?.toolCallId === CallId(callId))
@@ -194,7 +199,7 @@ describe('file-mount adversarial', () => {
     expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
     // Diff-based: only the changed line re-sent; survivors remapped.
     expect(sources[1]!['added']).toEqual([{ start: 3, end: 3 }])
-    expect(sources[1]!['mounted']).toEqual([{ start: 1, end: 6 }])
+    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 6 }])
     expect(resultText(agent, 'c2')).toContain('file changed: +1/-1 lines (~5 unchanged)')
     // The injected block carries ONLY the new line 3.
     const remount = agent.session.events.find((e) => e.type === 'user/message'

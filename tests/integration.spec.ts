@@ -32,6 +32,10 @@ function mountMessages(agent: Agent) {
       && source['kind'] === 'plugin' && source['plugin'] === 'file-mount') as unknown as Record<string, unknown>[]
 }
 
+/** Geometry-only view of mounted segments (freshness meta ignored). */
+function geo(segs: readonly { start: number; end: number }[]): { start: number; end: number }[] {
+  return segs.map(({ start, end }) => ({ start, end }))
+}
 /** The tool/result content text for one call id. */
 function resultText(agent: Agent, callId: string): string | undefined {
   const event = agent.session.events.find((e) => e.type === 'tool/result' && e.data.message.content[0]?.toolCallId === CallId(callId))
@@ -73,7 +77,7 @@ describe('file-mount integration', () => {
     expect(resultText(agent, 'c1')).toContain('<content>')
     const sources = mountMessages(agent)
     expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'dedup', 'increment'])
-    expect(sources[0]!['mounted']).toEqual([{ start: 1, end: 4 }])
+    expect(geo(sources[0]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 4 }])
     expect(sources[0]!['savedTokens']).toBe(0)
     expect(sources[0]!['form']).toBe('notice')
     expect(sources[0]!['summary']).toBe('mounted L1-4')
@@ -81,7 +85,7 @@ describe('file-mount integration', () => {
     expect(sources[1]!['savedTokens']).toBe(40)
     expect(sources[1]!['added']).toEqual([])
     expect(sources[2]!['added']).toEqual([{ start: 5, end: 6 }])
-    expect(sources[2]!['mounted']).toEqual([{ start: 1, end: 6 }])
+    expect(geo(sources[2]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 6 }])
     expect(sources[2]!['savedTokens']).toBe(20)
     expect(sources[2]!['summary']).toBe('+L5-6 - saved ≈ 20 tokens')
 
@@ -115,7 +119,7 @@ describe('file-mount integration', () => {
     // Ledger: one file, hash verified, ranges 1-6, cumulative savings.
     const ledger = ctx.fileMount.ledger(agent)
     expect(ledger.map((f) => f.absPath)).toEqual([normalizeAbsPath(file)])
-    expect(ledger[0]!.segments).toEqual([{ start: 1, end: 6 }])
+    expect(geo(ledger[0]!.segments)).toEqual([{ start: 1, end: 6 }])
     expect(ledger[0]!.savedTokens).toBe(60)
 
     
@@ -156,7 +160,7 @@ describe('file-mount integration', () => {
     const sources = mountMessages(agent)
     expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
     expect(sources[1]!['hash']).not.toBe(sources[0]!['hash'])
-    expect(sources[1]!['mounted']).toEqual([{ start: 1, end: 3 }])
+    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 3 }])
     expect(resultText(agent, 'c2')).toContain('file changed since last mount, remounting')
 
     
@@ -189,7 +193,7 @@ describe('file-mount integration', () => {
     expect(sources[1]!['hash']).not.toBe(sources[0]!['hash'])
     // Only the changed line is re-sent; the five unchanged lines stay mounted.
     expect(sources[1]!['added']).toEqual([{ start: 3, end: 3 }])
-    expect(sources[1]!['mounted']).toEqual([{ start: 1, end: 6 }])
+    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 6 }])
     expect(sources[1]!['savedTokens']).toBe(50)
     expect(resultText(agent, 'c2')).toContain('file changed: +1/-1 lines (~5 unchanged) since last mount')
 
@@ -204,7 +208,7 @@ describe('file-mount integration', () => {
     expect(remountText).toContain('CHANGED')
 
     const ledger = ctx.fileMount.ledger(agent)
-    expect(ledger[0]!.segments).toEqual([{ start: 1, end: 6 }])
+    expect(geo(ledger[0]!.segments)).toEqual([{ start: 1, end: 6 }])
     expect(ledger[0]!.savedTokens).toBe(50)
   })
 
@@ -237,7 +241,7 @@ describe('file-mount integration', () => {
 
     // The seeded ranges count as mounted: the read of L1-2 dedupes.
     expect(resultText(agent, 'c1')).toContain('already mounted, not re-added')
-    expect(ctx.fileMount.ledger(agent)[0]?.segments).toEqual([{ start: 1, end: 2 }])
+    expect(geo(ctx.fileMount.ledger(agent)[0]!.segments)).toEqual([{ start: 1, end: 2 }])
 
     
   })
@@ -269,7 +273,7 @@ describe('file-mount integration', () => {
     // The claim is void: c2 re-anchors natively instead of deduping.
     expect(resultText(agent, 'c2')).toContain('<content>')
     expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new', 'new'])
-    expect(ctx.fileMount.ledger(agent)[0]?.segments).toEqual([{ start: 1, end: 2 }])
+    expect(geo(ctx.fileMount.ledger(agent)[0]!.segments)).toEqual([{ start: 1, end: 2 }])
   })
 
   it('does not resurrect mounts shadowed by a checkpoint on replay', async () => {
@@ -305,7 +309,7 @@ describe('file-mount integration', () => {
 
     // The shadowed seed must not count: the first read anchors natively.
     expect(resultText(agent, 'c1')).toContain('<content>')
-    expect(ctx.fileMount.ledger(agent)[0]?.segments).toEqual([{ start: 1, end: 2 }])
+    expect(geo(ctx.fileMount.ledger(agent)[0]!.segments)).toEqual([{ start: 1, end: 2 }])
   })
 
   it('survives a jsonl persistence round trip (standard user/message carrier)', async () => {
@@ -334,7 +338,7 @@ describe('file-mount integration', () => {
 
     const replayed = new MountStore()
     replayed.replay(mountEvents.map((event) => ({ type: event.type, source: event.data.source })))
-    expect(replayed.mountedSegments(normalizeAbsPath(file))).toEqual([{ start: 1, end: 2 }])
+    expect(geo(replayed.mountedSegments(normalizeAbsPath(file)))).toEqual([{ start: 1, end: 2 }])
 
   })
 
@@ -360,7 +364,7 @@ describe('file-mount integration', () => {
     const sources = mountMessages(agent)
     expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
     expect(sources[1]!['added']).toEqual([{ start: 5, end: 6 }])
-    expect(sources[1]!['mounted']).toEqual([{ start: 1, end: 6 }])
+    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 6 }])
     expect(resultText(agent, 'c2')).toContain('file changed: +2/-0 lines (~4 unchanged) since last mount')
   })
 
@@ -408,7 +412,7 @@ describe('file-mount integration', () => {
     // The write mounts the whole file as known via a head-only 'new' message.
     const sources = mountMessages(agent)
     expect(sources.map((s) => s['mountKind'])).toEqual(['new'])
-    expect(sources[0]!['mounted']).toEqual([{ start: 1, end: 3 }])
+    expect(geo(sources[0]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 3 }])
     // The subsequent read of the written file dedupes instead of re-sending.
     send(agent, 'read it again')
     await waitForIdle(ctx, agent)

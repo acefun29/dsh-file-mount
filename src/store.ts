@@ -6,7 +6,7 @@
  * validation and fold rules live in mount-source.ts, shared with the browser
  * half (plan item 20).
  */
-import type { MountedFile, Segment } from './types.ts'
+import type { LedgerSegment, MountedFile } from './types.ts'
 import { applyMountState, parseMountSource } from './mount-source.ts'
 
 /** One user/message record as the ledger consumer reads it. */
@@ -26,7 +26,7 @@ export class MountStore {
     return [...this.files.values()]
   }
 
-  mountedSegments(absPath: string): Segment[] {
+  mountedSegments(absPath: string): LedgerSegment[] {
     return this.files.get(absPath)?.segments ?? []
   }
 
@@ -38,14 +38,24 @@ export class MountStore {
    */
   mount(file: MountedFile): void {
     const existing = this.files.get(file.absPath)
+    // Defensive: bare geometry segments (tests / older callers) fold with
+    // expired 0 and no born, exactly like a legacy message would.
+    const segments = file.segments.map((seg) => ({
+      start: seg.start,
+      end: seg.end,
+      ...seg.born !== undefined ? { born: seg.born } : {},
+      expired: seg.expired ?? 0,
+    }))
     const next = applyMountState(existing, {
       hash: file.hash,
       totalLines: file.totalLines,
-      segments: file.segments,
+      segments,
       savedTokens: file.savedTokens ?? 0,
       spentTokens: file.spentTokens ?? 0,
     })
-    this.files.set(file.absPath, { absPath: file.absPath, ...next })
+    // The caller always passes the latest expired history (pruned + inherited);
+    // a same-hash remount keeps the caller's state rather than the stale copy.
+    this.files.set(file.absPath, { absPath: file.absPath, ...next, expiredHistory: file.expiredHistory ?? [] })
   }
 
   /** Drop one entry (hash change / explicit invalidation). */
@@ -64,7 +74,13 @@ export class MountStore {
       const parsed = parseMountSource(record.source)
       if (parsed === undefined) continue
       const existing = this.files.get(parsed.path)
-      this.files.set(parsed.path, { absPath: parsed.path, ...applyMountState(existing, parsed.delta) })
+      // History is host-side only: replay rebuilds from scratch (the next read
+      // re-prunes), so restored entries start with an empty history.
+      this.files.set(parsed.path, {
+        absPath: parsed.path,
+        ...applyMountState(existing, parsed.delta),
+        expiredHistory: existing?.expiredHistory ?? [],
+      })
     }
   }
 

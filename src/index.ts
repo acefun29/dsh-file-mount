@@ -44,7 +44,7 @@ import {
 } from './render.ts'
 import { MountStore, type LedgerRecord } from './store.ts'
 import { estimateRangeTokens, estimateTokens } from './tokens.ts'
-import type { MountKind, MountedFile, MountSource, Segment } from './types.ts'
+import type { ExpiredSegment, LedgerSegment, MountKind, MountedFile, MountSource, Segment } from './types.ts'
 
 export { FileContentCache } from './file-cache.ts'
 export { MountStore, type LedgerRecord } from './store.ts'
@@ -285,7 +285,7 @@ export class FileMountService extends Service {
       const want: LineRange = { start: 1, end: entry.lineCount }
       const head = markerHead(path, entry.hash, [want])
       const spentTokens = estimateTokens(head)
-      this.mount(store, agent.id, absPath, entry.hash, entry.lineCount, [want], 0, spentTokens)
+      this.mount(store, agent.id, absPath, entry.hash, entry.lineCount, [want].map((s) => ({ ...s, expired: 0 })), 0, spentTokens)
       return {
         kind: 'accept',
         additionalContexts: [
@@ -398,7 +398,7 @@ export class FileMountService extends Service {
       const head = markerHead(value.path, entry.hash, [want])
       const spentTokens = estimateTokens(head)
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
-      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, [want], pendingSaved, spentTokens)
+      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, [want].map((s) => ({ ...s, expired: 0 })), pendingSaved, spentTokens)
       if (downstream.value !== undefined) return downstream
       return {
         kind: 'accept',
@@ -424,7 +424,7 @@ export class FileMountService extends Service {
         && previous.lineHashes.length > 0
         && entry.lineHashes.length > 0
         && entry.lineCount === value.totalLines
-      let baseMounted: Segment[] = []
+      let baseMounted: LedgerSegment[] = []
       let stats: { added: number; removed: number; unchanged: number } | undefined
       if (diffable) {
         const oldToNew = diffLines(previous.lineHashes, entry.lineHashes)
@@ -448,7 +448,7 @@ export class FileMountService extends Service {
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
       const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
       const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
-      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens)
+      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted.map((s) => ({ ...s, expired: 0 })), savedTokens, spentTokens)
       const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'remount', savedTokens, spentTokens)
       if (downstream.value !== undefined) return downstream
       return {
@@ -480,7 +480,7 @@ export class FileMountService extends Service {
         perAgent.set(absPath, 0)
         const noteText = `${markerHead(value.path, entry.hash, mounted)} - already mounted, saved ≈ ${savedTokens} tokens`
         const spentTokens = estimateTokens(noteText)
-        store.mount({ absPath, hash: entry.hash, totalLines: value.totalLines, segments: [], savedTokens, spentTokens })
+        store.mount({ absPath, hash: entry.hash, totalLines: value.totalLines, segments: [], savedTokens, spentTokens, expiredHistory: existing.expiredHistory })
         const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [], 'dedup', savedTokens, spentTokens)
         return {
           kind: 'accept',
@@ -513,7 +513,7 @@ export class FileMountService extends Service {
     const pendingSaved = this.takePendingSaved(agent.id, absPath)
     const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
     const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
-    this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens)
+    this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted.map((s) => ({ ...s, expired: 0 })), savedTokens, spentTokens)
     const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment', savedTokens, spentTokens)
     const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
     if (downstream.value !== undefined) return downstream
@@ -569,8 +569,8 @@ export class FileMountService extends Service {
   }
 
   /** Record segments and pin the identity in the file cache for one session. */
-  private mount(store: MountStore, agentId: string, absPath: string, hash: string, totalLines: number, segments: Segment[], savedTokens: number, spentTokens: number): void {
-    store.mount({ absPath, hash, totalLines, segments, savedTokens, spentTokens })
+  private mount(store: MountStore, agentId: string, absPath: string, hash: string, totalLines: number, segments: LedgerSegment[], savedTokens: number, spentTokens: number, history: ExpiredSegment[] = []): void {
+    store.mount({ absPath, hash, totalLines, segments, savedTokens, spentTokens, expiredHistory: history })
     this.pinFor(agentId, absPath)
   }
 

@@ -4,7 +4,8 @@
  * undefined when it was deleted or changed). The mapping is monotonic, so mounted
  * segments remap by walking their surviving lines.
  */
-import { normalize, type LineRange } from './ranges.ts'
+import { normalizeLedger } from './mount-source.ts'
+import type { LedgerSegment } from './types.ts'
 
 /** Max cells in the middle LCS DP table; oversized middles stay unmatched. */
 const MAX_MIDDLE_CELLS = 1_000_000
@@ -71,10 +72,11 @@ function lcsMatches(a: string[], b: string[]): number[] {
 /**
  * Remap mounted segments (old coordinates) through a diff into new coordinates.
  * Surviving lines keep their ranges (contiguous survivors stay contiguous);
- * changed or deleted lines drop out. Adjacent surviving runs merge.
+ * changed or deleted lines drop out. Adjacent surviving runs merge and carry
+ * their freshness metadata through (earliest born, max expired).
  */
-export function remapSegments(segments: readonly LineRange[], oldToNew: readonly (number | undefined)[]): LineRange[] {
-  const out: LineRange[] = []
+export function remapSegments(segments: readonly LedgerSegment[], oldToNew: readonly (number | undefined)[]): LedgerSegment[] {
+  const out: LedgerSegment[] = []
   for (const seg of segments) {
     let i = seg.start
     while (i <= seg.end) {
@@ -89,11 +91,16 @@ export function remapSegments(segments: readonly LineRange[], oldToNew: readonly
         end = oldToNew[j - 1]!
         j++
       }
-      out.push({ start: mapped, end })
+      out.push({
+        start: mapped,
+        end,
+        ...seg.born !== undefined ? { born: seg.born } : {},
+        expired: seg.expired,
+      })
       i = j
     }
   }
-  return normalize(out)
+  return normalizeLedger(out)
 }
 
 /** Counts of added/removed/unchanged lines a diff implies (for the remount note). */
