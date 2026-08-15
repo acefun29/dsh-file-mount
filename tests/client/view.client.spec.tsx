@@ -15,7 +15,8 @@ function viewProps(nodes: readonly ConversationNode[]) {
   const t = (key: FileMountKey): string => zh[key]
   return {
     // Minimal stand-in for the slot runtime share: one stable snapshot.
-    useSession: (selector: (snapshot: { nodes: readonly ConversationNode[] }) => unknown) => selector({ nodes }),
+    useSession: (selector: (snapshot: { nodes: readonly ConversationNode[]; sessionId: string }) => unknown) =>
+      selector({ nodes, sessionId: 's1' }),
     useSessions: () => undefined,
     sessionId: 's1' as never,
     t,
@@ -97,7 +98,8 @@ describe('MountedFilesView', () => {
     const nodes = vi.fn<() => ConversationNode[]>()
     nodes.mockReturnValue(a)
     const props = {
-      useSession: (selector: (snapshot: { nodes: readonly ConversationNode[] }) => unknown) => selector({ nodes: nodes() }),
+      useSession: (selector: (snapshot: { nodes: readonly ConversationNode[]; sessionId: string }) => unknown) =>
+        selector({ nodes: nodes(), sessionId: 's1' }),
       useSessions: () => undefined,
       sessionId: 's1' as never,
       t: (key: FileMountKey): string => zh[key],
@@ -108,5 +110,57 @@ describe('MountedFilesView', () => {
     rerender(<MountedFilesView {...props} />)
     expect(container.querySelectorAll('[data-mount-row]')).toHaveLength(1)
     expect(container.querySelector('[data-mount-empty]')).toBeNull()
+  })
+
+  it('tier picker overrides the freshness level and pushes the threshold to the host', async () => {
+    const nodes: ConversationNode[] = [
+      {
+        kind: 'assistant',
+        seq: 1,
+        time: 1000,
+        turn: 1,
+        step: 1,
+        blocks: [],
+        usage: { inputTokens: 200, cacheReadTokens: 800, outputTokens: 1 },
+        messageId: 'm1' as never,
+      } as unknown as ConversationNode,
+      {
+        kind: 'context',
+        seq: 2,
+        time: 2000,
+        content: [{ type: 'text', text: 'block' }],
+        source: {
+          kind: 'plugin',
+          plugin: 'file-mount',
+          form: 'notice',
+          summary: 'mounted L1-50',
+          path: 'src/a.ts',
+          hash: 'abcdef0123456789',
+          totalLines: 100,
+          // born 200 at L 1000 -> drift 0.8: warn at the default 0.85,
+          // expired at the aggressive 0.5 tier.
+          mounted: [{ start: 1, end: 50, born: 200, expired: 0 }],
+          added: [{ start: 1, end: 50 }],
+          mountKind: 'new',
+          savedTokens: 0,
+          freshnessThreshold: 0.85,
+        },
+        provenance: { role: 'inject', label: 'file-mount' },
+        form: null,
+      },
+    ]
+    const api = { update: vi.fn().mockResolvedValue({}) }
+    const { container } = render(<MountedFilesView {...viewProps(nodes)} api={api} />)
+    const dot = container.querySelector('[data-mount-file-freshness]')
+    expect(dot?.getAttribute('data-mount-file-freshness')).toBe('warn')
+    // The picker defaults to the tier nearest the folded threshold (0.85).
+    expect((container.querySelector('[data-mount-tier]') as HTMLSelectElement).value).toBe('standard')
+    // Switch to the aggressive tier: the level flips to expired immediately
+    // and the new threshold is pushed through the settings api.
+    const select = container.querySelector('[data-mount-tier]') as HTMLSelectElement
+    select.value = 'aggressive'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    expect(container.querySelector('[data-mount-file-freshness]')?.getAttribute('data-mount-file-freshness')).toBe('expired')
+    expect(api.update).toHaveBeenCalledWith({ ns: 'file-mount', patch: { freshnessThreshold: 0.5 } })
   })
 })

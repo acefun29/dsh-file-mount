@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { MountFold, foldMounts, freshnessLevel } from '../../src/client/mounted-files.ts'
+import {
+  FRESHNESS_TIERS,
+  MountFold,
+  foldMounts,
+  freshnessLevel,
+  nearestTier,
+  tierOf,
+} from '../../src/client/mounted-files.ts'
 
 function contextNode(source: Record<string, unknown>, seq = 1, time = 1000): ContextMessageNode {
   return {
@@ -125,6 +132,25 @@ describe('freshnessLevel', () => {
   it('respects the configured threshold', () => {
     expect(freshnessLevel(50, 100, 0.3)).toBe('expired') // drift 0.5 > 0.3
     expect(freshnessLevel(50, 100, 0.9)).toBe('ok')
+  })
+})
+
+describe('freshness tiers', () => {
+  it('maps each tier id to its threshold (drift past it counts as expired)', () => {
+    expect(tierOf('lenient')).toBe(0.95)
+    expect(tierOf('standard')).toBe(0.85)
+    expect(tierOf('sensitive')).toBe(0.7)
+    expect(tierOf('aggressive')).toBe(0.5)
+    expect(FRESHNESS_TIERS).toHaveLength(4)
+  })
+
+  it('picks the nearest tier for an arbitrary threshold', () => {
+    expect(nearestTier(0.95)).toBe('lenient')
+    expect(nearestTier(0.86)).toBe('standard')
+    expect(nearestTier(0.72)).toBe('sensitive')
+    expect(nearestTier(0.52)).toBe('aggressive')
+    expect(nearestTier(1)).toBe('lenient')
+    expect(nearestTier(0)).toBe('aggressive')
   })
 })
 
