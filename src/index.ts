@@ -81,10 +81,18 @@ export interface Config {
   maxManagedBytes?: number
   /** Optional path of the cross-session stats file (plan item 24). */
   statsFile?: string
-  /** Freshness tracking (attention-decay plan): segments drift from the context tail. */
+  /** Freshness tracking (U-shaped attention decay model): segments in middle context expire. */
   freshnessEnabled?: boolean
-  /** Drift ratio past which a segment counts as expired (0..1, 0.85 = top 15%). */
+  /** U-score threshold below which a segment counts as expired (0..1, default 0.4). */
   freshnessThreshold?: number
+  /** Valley attention parameter lambda (0..1, default 0.7: valley = 1 - lambda = 0.3). */
+  freshnessLambda?: number
+  /** Volume protection slope alpha (default 0.5). */
+  freshnessAlpha?: number
+  /** Volume protection max bonus Wmax (default 0.5). */
+  freshnessWmax?: number
+  /** Re-read safety valve count (integer >= 0, default 2: pass-through on 2nd full intercept; 0 = disabled). */
+  valveReads?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -98,9 +106,12 @@ export const Config: z<Config> = z.object({
   maxManagedBytes: z.number().step(1).min(1).default(16 * 1024 * 1024),
   statsFile: z.string(),
   freshnessEnabled: z.boolean().default(true),
-  freshnessThreshold: z.number().step(0.01).min(0).max(1).default(0.85),
+  freshnessThreshold: z.number().step(0.01).min(0).max(1).default(0.4),
+  freshnessLambda: z.number().step(0.01).min(0).max(1).default(0.7),
+  freshnessAlpha: z.number().step(0.01).min(0).default(0.5),
+  freshnessWmax: z.number().step(0.01).min(0).default(0.5),
+  valveReads: z.number().step(1).min(0).default(2),
 })
-
 export const name = 'file-mount'
 
 declare module '@deepseek-ai/cordis' {
@@ -179,6 +190,12 @@ export class FileMountService extends Service {
    * host provides one (runtime-adjustable from the dashboard tier picker),
    * the config value otherwise. */
   private freshnessThreshold: number
+  private readonly freshnessLambda: number
+  private readonly freshnessAlpha: number
+  private readonly freshnessWmax: number
+  private readonly valveReads: number
+  /** Per-session consecutive full-dedup intercept counts for safety valve: agentId -> absPath -> count. */
+  private readonly valveCounts = new Map<string, Map<string, number>>()
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'fileMount')
@@ -189,8 +206,12 @@ export class FileMountService extends Service {
     this.excludeGlobs = resolved.excludeGlobs ?? []
     this.statsFile = resolved.statsFile
     this.freshnessEnabled = resolved.freshnessEnabled ?? true
-    this.configuredFreshnessThreshold = resolved.freshnessThreshold ?? 0.85
+    this.configuredFreshnessThreshold = resolved.freshnessThreshold ?? 0.4
     this.freshnessThreshold = this.configuredFreshnessThreshold
+    this.freshnessLambda = resolved.freshnessLambda ?? 0.7
+    this.freshnessAlpha = resolved.freshnessAlpha ?? 0.5
+    this.freshnessWmax = resolved.freshnessWmax ?? 0.5
+    this.valveReads = resolved.valveReads ?? 2
     this.cache = new FileContentCache({
       ...resolved.capacity !== undefined ? { capacity: resolved.capacity } : {},
       ...resolved.ttlMs !== undefined ? { ttlMs: resolved.ttlMs } : {},
@@ -221,7 +242,7 @@ export class FileMountService extends Service {
       if (exec.name === 'read') return this.onReadResult(exec.agent, result, downstream)
       if (exec.name === 'write') return this.onWriteResult(exec.agent, result, downstream)
       if (exec.name === 'edit') {
-        this.onEditResult(result.value)
+        this.onEditResult(exec.agent, result.value)
         return downstream
       }
       return downstream
@@ -335,6 +356,7 @@ export class FileMountService extends Service {
             forgotten = true
           }
           service.pendingDedup.get(exec.agent.id)?.delete(absPath)
+          service.clearValveCount(exec.agent.id, absPath)
         }
         return { forgotten }
       },
@@ -354,6 +376,8 @@ export class FileMountService extends Service {
     if (path === undefined) return downstream
     const absPath = normalizeAbsPath(path)
     this.cache.invalidate(absPath)
+    this.clearValveCount(agent.id, absPath)
+    this.pendingDedup.get(agent.id)?.delete(absPath)
     try {
       const lookup = await this.cache.lookup(absPath)
       if (lookup === null) return downstream
@@ -363,7 +387,7 @@ export class FileMountService extends Service {
       const want: LineRange = { start: 1, end: entry.lineCount }
       const head = markerHead(path, entry.hash, [want])
       const spentTokens = estimateTokens(head)
-      const fresh = this.stampBorn(agent.id, head, [want])
+      const fresh = this.stampBornWrite(agent.id, head, want)
       this.mount(store, agent.id, absPath, entry.hash, entry.lineCount, fresh, 0, spentTokens)
       return {
         kind: 'accept',
@@ -379,10 +403,39 @@ export class FileMountService extends Service {
 
   /** An edit changes only a region, so the whole file is NOT known: just
    * invalidate the cache identity; the next read diff-remounts (plan item 9). */
-  private onEditResult(value: unknown): void {
+  private onEditResult(agent: Agent | undefined, value: unknown): void {
     const path = asPathValue(value)
     if (path === undefined) return
-    this.cache.invalidate(normalizeAbsPath(path))
+    const absPath = normalizeAbsPath(path)
+    this.cache.invalidate(absPath)
+    if (agent !== undefined) {
+      this.clearValveCount(agent.id, absPath)
+      this.pendingDedup.get(agent.id)?.delete(absPath)
+    } else {
+      for (const perAgent of this.valveCounts.values()) perAgent.delete(absPath)
+      for (const perAgent of this.pendingDedup.values()) perAgent.delete(absPath)
+    }
+  }
+
+  private getValveCount(agentId: string, absPath: string): number {
+    return this.valveCounts.get(agentId)?.get(absPath) ?? 0
+  }
+
+  private setValveCount(agentId: string, absPath: string, count: number): void {
+    let perAgent = this.valveCounts.get(agentId)
+    if (perAgent === undefined) {
+      perAgent = new Map()
+      this.valveCounts.set(agentId, perAgent)
+    }
+    perAgent.set(absPath, count)
+  }
+
+  private clearValveCount(agentId: string, absPath: string): void {
+    const perAgent = this.valveCounts.get(agentId)
+    if (perAgent !== undefined) {
+      perAgent.delete(absPath)
+      if (perAgent.size === 0) this.valveCounts.delete(agentId)
+    }
   }
 
   /** Take (and clear) the silent-dedup savings pending for a session+file, so
@@ -472,12 +525,12 @@ export class FileMountService extends Service {
     // New file: the read result IS the anchor; a head-only state message
     // carries the ledger to UI folds and resume replay.
     if (existing === undefined) {
+      this.clearValveCount(agent.id, absPath)
       const head = markerHead(value.path, entry.hash, [want])
       const spentTokens = estimateTokens(head)
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
-      const fresh = this.stampBorn(agent.id, head, [want])
+      const fresh = this.stampBornNew(agent.id, want, lines, windowStart)
       this.mount(store, agent.id, absPath, entry.hash, value.totalLines, fresh, pendingSaved, spentTokens)
-      if (downstream.value !== undefined) return downstream
       return {
         kind: 'accept',
         additionalContexts: [
@@ -495,6 +548,7 @@ export class FileMountService extends Service {
     // re-sending just what changed. Falls back to a whole-window remount when
     // there is no matching draft (or nothing survived the diff).
     if (existing.hash !== entry.hash) {
+      this.clearValveCount(agent.id, absPath)
       const previous = lookup.previous
       const diffable = lookup.changed
         && previous !== undefined
@@ -527,7 +581,8 @@ export class FileMountService extends Service {
       const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
       // Fresh born metadata on the re-sent ranges; history (expired counts)
       // survives the hash change and is inherited by overlapping re-mounts.
-      const fresh = this.stampBorn(agent.id, block, missing)
+      const blockHead = markerHead(value.path, entry.hash, normalize([...baseMounted, ...missing]))
+      const fresh = this.stampBornRanges(agent.id, blockHead, missing, lines, windowStart)
       const inherited = inheritHistory(fresh, existing.expiredHistory)
       const postMounted = normalizeLedger([...baseMounted, ...inherited.segments])
       this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
@@ -548,17 +603,80 @@ export class FileMountService extends Service {
     let history = existing.expiredHistory
     let mounted = existing.segments
     if (this.freshnessEnabled) {
-      const pruned = pruneExpired(mounted, this.contextL.get(agent.id), this.freshnessThreshold)
+      const pruned = pruneExpired(mounted, this.contextL.get(agent.id), this.freshnessThreshold, {
+        lambda: this.freshnessLambda,
+        alpha: this.freshnessAlpha,
+        Wmax: this.freshnessWmax,
+      })
       mounted = pruned.active
       history = [...history, ...pruned.history]
     }
     const missing = subtract(mounted, want)
     if (missing.length === 0) {
-      // Full coverage: the window adds nothing. Replace the result with the
-      // short marker. The FIRST dedup of a file since the last real message
-      // also sends a head-only note (the durable savings carrier); repeated
-      // dedups stay quiet and merge their savings into the next real message
-      // (plan item 3: no more note spam for a model stuck re-reading).
+      // Safety valve check (Section 3.2): if the model re-reads an already
+      // mounted window repeatedly, trigger native pass-through on the valveReads-th full intercept.
+      if (this.valveReads > 0) {
+        const count = this.getValveCount(agent.id, absPath) + 1
+        if (count >= this.valveReads) {
+          this.clearValveCount(agent.id, absPath)
+          this.takePendingSaved(agent.id, absPath)
+          const outsideSegments: LedgerSegment[] = []
+          const newHistory: ExpiredSegment[] = [...history]
+          let maxOverlapExpired = 0
+
+          for (const seg of existing.segments) {
+            if (seg.end < want.start || seg.start > want.end) {
+              outsideSegments.push(seg)
+            } else {
+              const overlapStart = Math.max(seg.start, want.start)
+              const overlapEnd = Math.min(seg.end, want.end)
+              newHistory.push({
+                start: overlapStart,
+                end: overlapEnd,
+                expired: seg.expired + 1,
+              })
+              maxOverlapExpired = Math.max(maxOverlapExpired, seg.expired + 1)
+              if (seg.start < overlapStart) {
+                outsideSegments.push({
+                  start: seg.start,
+                  end: overlapStart - 1,
+                  ...seg.born !== undefined ? { born: seg.born } : {},
+                  ...seg.tokens !== undefined ? { tokens: estimateRangeTokens(lines, windowStart, [{ start: seg.start, end: overlapStart - 1 }]) } : {},
+                  expired: seg.expired,
+                })
+              }
+              if (seg.end > overlapEnd) {
+                outsideSegments.push({
+                  start: overlapEnd + 1,
+                  end: seg.end,
+                  ...seg.born !== undefined ? { born: seg.born } : {},
+                  ...seg.tokens !== undefined ? { tokens: estimateRangeTokens(lines, windowStart, [{ start: overlapEnd + 1, end: seg.end }]) } : {},
+                  expired: seg.expired,
+                })
+              }
+            }
+          }
+
+          const freshSeg = this.stampBornNew(agent.id, want, lines, windowStart)[0]!
+          freshSeg.expired = maxOverlapExpired
+          const postMounted = normalizeLedger([...outsideSegments, freshSeg])
+          const head = markerHead(value.path, entry.hash, postMounted)
+          const spentTokens = estimateTokens(head)
+          store.replaceSegments(absPath, postMounted, newHistory, 0, spentTokens)
+          const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', 0, spentTokens)
+          if (downstream.value !== undefined) return downstream
+          return {
+            kind: 'accept',
+            additionalContexts: [
+              ...downstream.additionalContexts ?? [],
+              this.contextMessage(head, source),
+            ],
+          }
+        }
+        this.setValveCount(agent.id, absPath, count)
+      }
+
+      // Full coverage dedup: persist pruned active segments and history
       if (downstream.value !== undefined) return downstream
       const savedTokens = estimateRangeTokens(lines, windowStart, [want])
       if (savedTokens < this.minSavedTokens) return downstream
@@ -572,7 +690,7 @@ export class FileMountService extends Service {
         perAgent.set(absPath, 0)
         const noteText = `${markerHead(value.path, entry.hash, mounted)} - already mounted, saved ≈ ${savedTokens} tokens`
         const spentTokens = estimateTokens(noteText)
-        store.mount({ absPath, hash: entry.hash, totalLines: value.totalLines, segments: [], savedTokens, spentTokens, expiredHistory: history })
+        store.replaceSegments(absPath, mounted, history, savedTokens, spentTokens)
         const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [], 'dedup', savedTokens, spentTokens)
         return {
           kind: 'accept',
@@ -583,7 +701,8 @@ export class FileMountService extends Service {
           ],
         }
       }
-      // Repeated dedup: quiet. Merge the saving into the next real message.
+      // Repeated dedup: quiet. Persist pruned state and merge savings.
+      store.replaceSegments(absPath, mounted, history, 0, 0)
       const prior = this.pendingDedup.get(agent.id)!.get(absPath)!
       this.pendingDedup.get(agent.id)!.set(absPath, prior + savedTokens)
       return {
@@ -592,6 +711,7 @@ export class FileMountService extends Service {
         additionalContexts: [...downstream.additionalContexts ?? []],
       }
     }
+    this.clearValveCount(agent.id, absPath)
     const block = renderMountBlock({
       path: value.path,
       hash: entry.hash,
@@ -604,7 +724,8 @@ export class FileMountService extends Service {
     const pendingSaved = this.takePendingSaved(agent.id, absPath)
     const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
     const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
-    const fresh = this.stampBorn(agent.id, block, missing)
+    const blockHead = markerHead(value.path, entry.hash, normalize([...mounted, ...missing]))
+    const fresh = this.stampBornRanges(agent.id, blockHead, missing, lines, windowStart)
     const inherited = inheritHistory(fresh, history)
     const postMounted = normalizeLedger([...mounted, ...inherited.segments])
     this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
@@ -617,7 +738,6 @@ export class FileMountService extends Service {
       additionalContexts: [...downstream.additionalContexts ?? [], this.contextMessage(block, source)],
     }
   }
-
   /** The structured source state for one injected message. */
   private mountSource(
     store: MountStore,
@@ -669,25 +789,61 @@ export class FileMountService extends Service {
     this.pinFor(agentId, absPath)
   }
 
-  /** Context position (input tokens) a fresh mount will occupy: the last
-   * request's total plus this block's estimate. Undefined when the session has
-   * no usage data (the segment then renders as unknown freshness). */
-  private bornAt(agentId: string, block: string): number | undefined {
+  /** Stamp fresh-born and tokens on a newly mounted single range (initial read or safety-valve remount). */
+  private stampBornNew(
+    agentId: string,
+    want: LineRange,
+    lines: readonly string[],
+    windowStart: number,
+  ): LedgerSegment[] {
     const contextLength = this.contextL.get(agentId)
-    return contextLength === undefined ? undefined : contextLength + estimateTokens(block)
+    const segTokens = estimateRangeTokens(lines, windowStart, [want])
+    return [{
+      start: want.start,
+      end: want.end,
+      ...contextLength !== undefined ? { born: contextLength + segTokens } : {},
+      tokens: segTokens,
+      expired: 0,
+    }]
   }
 
-  /** Stamp fresh-born metadata on newly mounted ranges (same mount position). */
-  private stampBorn(agentId: string, block: string, ranges: readonly LineRange[]): LedgerSegment[] {
-    const born = this.bornAt(agentId, block)
-    return ranges.map((range) => ({
-      start: range.start,
-      end: range.end,
+  /** Stamp fresh-born and tokens on newly mounted ranges in an injected block. */
+  private stampBornRanges(
+    agentId: string,
+    blockHead: string,
+    ranges: readonly LineRange[],
+    lines: readonly string[],
+    windowStart: number,
+  ): LedgerSegment[] {
+    const contextLength = this.contextL.get(agentId)
+    let offsetInBlock = estimateTokens(blockHead)
+    const fresh: LedgerSegment[] = []
+    for (const range of ranges) {
+      const segTokens = estimateRangeTokens(lines, windowStart, [range])
+      const headerTokens = estimateTokens(`--- ${formatRange(range.start, range.end)} ---`)
+      offsetInBlock += headerTokens + segTokens
+      fresh.push({
+        start: range.start,
+        end: range.end,
+        ...contextLength !== undefined ? { born: contextLength + offsetInBlock } : {},
+        tokens: segTokens,
+        expired: 0,
+      })
+    }
+    return fresh
+  }
+
+  /** Stamp fresh-born on a write mount (tokens unknown, born at status message). */
+  private stampBornWrite(agentId: string, head: string, want: LineRange): LedgerSegment[] {
+    const contextLength = this.contextL.get(agentId)
+    const born = contextLength === undefined ? undefined : contextLength + estimateTokens(head)
+    return [{
+      start: want.start,
+      end: want.end,
       ...born !== undefined ? { born } : {},
       expired: 0,
-    }))
+    }]
   }
-
   /** Pin a mounted file for one session, honoring the per-session cap (LRU). */
   private pinFor(agentId: string, absPath: string): void {
     let order = this.pinOrders.get(agentId)
@@ -723,6 +879,7 @@ export class FileMountService extends Service {
     this.restores.delete(id)
     this.pendingDedup.delete(id)
     this.contextL.delete(id)
+    this.valveCounts.delete(id)
     if (store !== undefined) void this.persistStats(store)
   }
 
@@ -830,8 +987,8 @@ export class FileMountService extends Service {
     store.replay(this.visibleMountRecords(agent))
     this.resyncPins(agent.id, store)
     this.pendingDedup.delete(agent.id)
+    this.valveCounts.delete(agent.id)
   }
-
   /** Replay the ledger from plugin-injected message sources in the live log. */
   private kickoffRestore(agent: Agent): Promise<void> {
     const existing = this.restores.get(agent.id)
@@ -863,8 +1020,8 @@ export class FileMountService extends Service {
     this.pinOrders.delete(agent.id)
     this.pendingDedup.delete(agent.id)
     this.contextL.delete(agent.id)
+    this.valveCounts.delete(agent.id)
   }
-
   /** Live ledger snapshot for UIs and tests. */
   ledger(agent: Agent): MountedFile[] {
     return this.stores.get(agent.id)?.all() ?? []

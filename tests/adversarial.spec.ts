@@ -199,7 +199,11 @@ describe('file-mount adversarial', () => {
     expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
     // Diff-based: only the changed line re-sent; survivors remapped.
     expect(sources[1]!['added']).toEqual([{ start: 3, end: 3 }])
-    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 6 }])
+    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([
+      { start: 1, end: 2 },
+      { start: 3, end: 3 },
+      { start: 4, end: 6 },
+    ])
     expect(resultText(agent, 'c2')).toContain('file changed: +1/-1 lines (~5 unchanged)')
     // The injected block carries ONLY the new line 3.
     const remount = agent.session.events.find((e) => e.type === 'user/message'
@@ -226,7 +230,7 @@ describe('file-mount adversarial', () => {
       toolCallResponse('c4', 'read', { file_path: file, offset: 1, limit: 3 }),
       textResponse('fourth turn done'),
     ])
-    const ctx = await harness(adapter, { cwd: dir })
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 0 } })
     const agent = ctx.agentLoop.create(SessionId('ad-parked'), { provider: 'mock', model: 'mock' })
     send(agent, 'do it')
     await waitForIdle(ctx, agent)

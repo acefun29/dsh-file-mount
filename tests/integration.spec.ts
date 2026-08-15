@@ -106,7 +106,10 @@ describe('file-mount integration', () => {
     expect(sources[1]!['savedTokens']).toBe(40)
     expect(sources[1]!['added']).toEqual([])
     expect(sources[2]!['added']).toEqual([{ start: 5, end: 6 }])
-    expect(geo(sources[2]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 6 }])
+    expect(geo(sources[2]!['mounted'] as { start: number; end: number }[])).toEqual([
+      { start: 1, end: 4 },
+      { start: 5, end: 6 },
+    ])
     expect(sources[2]!['savedTokens']).toBe(20)
     expect(sources[2]!['summary']).toBe('+L5-6 - saved ≈ 20 tokens')
 
@@ -140,9 +143,11 @@ describe('file-mount integration', () => {
     // Ledger: one file, hash verified, ranges 1-6, cumulative savings.
     const ledger = ctx.fileMount.ledger(agent)
     expect(ledger.map((f) => f.absPath)).toEqual([normalizeAbsPath(file)])
-    expect(geo(ledger[0]!.segments)).toEqual([{ start: 1, end: 6 }])
+    expect(geo(ledger[0]!.segments)).toEqual([
+      { start: 1, end: 4 },
+      { start: 5, end: 6 },
+    ])
     expect(ledger[0]!.savedTokens).toBe(60)
-
     
   })
 
@@ -214,7 +219,11 @@ describe('file-mount integration', () => {
     expect(sources[1]!['hash']).not.toBe(sources[0]!['hash'])
     // Only the changed line is re-sent; the five unchanged lines stay mounted.
     expect(sources[1]!['added']).toEqual([{ start: 3, end: 3 }])
-    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 6 }])
+    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([
+      { start: 1, end: 2 },
+      { start: 3, end: 3 },
+      { start: 4, end: 6 },
+    ])
     expect(sources[1]!['savedTokens']).toBe(50)
     expect(resultText(agent, 'c2')).toContain('file changed: +1/-1 lines (~5 unchanged) since last mount')
 
@@ -229,7 +238,11 @@ describe('file-mount integration', () => {
     expect(remountText).toContain('CHANGED')
 
     const ledger = ctx.fileMount.ledger(agent)
-    expect(geo(ledger[0]!.segments)).toEqual([{ start: 1, end: 6 }])
+    expect(geo(ledger[0]!.segments)).toEqual([
+      { start: 1, end: 2 },
+      { start: 3, end: 3 },
+      { start: 4, end: 6 },
+    ])
     expect(ledger[0]!.savedTokens).toBe(50)
   })
 
@@ -385,7 +398,10 @@ describe('file-mount integration', () => {
     const sources = mountMessages(agent)
     expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
     expect(sources[1]!['added']).toEqual([{ start: 5, end: 6 }])
-    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([{ start: 1, end: 6 }])
+    expect(geo(sources[1]!['mounted'] as { start: number; end: number }[])).toEqual([
+      { start: 1, end: 4 },
+      { start: 5, end: 6 },
+    ])
     expect(resultText(agent, 'c2')).toContain('file changed: +2/-0 lines (~4 unchanged) since last mount')
   })
 
@@ -400,7 +416,7 @@ describe('file-mount integration', () => {
       toolCallResponse('c4', 'read', { file_path: subject, offset: 5, limit: 2 }),
       textResponse('done'),
     ])
-    const ctx = await harness(adapter, { cwd: dir })
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 0 } })
     const agent = ctx.agentLoop.create(SessionId('it-dedup-merge'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
@@ -518,7 +534,7 @@ describe('file-mount integration', () => {
       toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 310),
       textWithUsage('done', 350),
     ])
-    const ctx = await harness(adapter, { cwd: dir, config: { freshnessThreshold: 0.3 } })
+    const ctx = await harness(adapter, { cwd: dir })
     const agent = ctx.agentLoop.create(SessionId('it-freshness'), { provider: 'mock', model: 'mock' })
     send(agent, 'hello')
     await waitForIdle(ctx, agent)
@@ -550,18 +566,18 @@ describe('file-mount integration', () => {
     const line = (n: string) => n + 'x'.repeat(39)
     await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
 
-    // Request totals: 1000 -> 1100 (mount) -> 1200 -> 12300 -> 12400 (re-read).
+    // Request totals: 1000 -> 1100 (mount) -> 1200 -> 2300 -> 2400 (re-read).
     // The UNCACHED deltas (150 -> 400) would keep the segment "fresh" forever
-    // (born > L); the full-prompt clock sees 1100 -> 12400 and expires it.
+    // (born > L); the full-prompt clock sees 1100 -> 2400 (mid-window valley) and expires it.
     const adapter = new MockAdapter([
       textWithUsageCached('hi', 100, 900),
       toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }, 150, 950),
       textWithUsageCached('ok', 200, 1000),
-      textWithUsageCached('grow', 300, 12000),
-      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 400, 12000),
-      textWithUsageCached('done', 500, 12000),
+      textWithUsageCached('grow', 300, 2000),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 400, 2000),
+      textWithUsageCached('done', 500, 2000),
     ])
-    const ctx = await harness(adapter, { cwd: dir, config: { freshnessThreshold: 0.3 } })
+    const ctx = await harness(adapter, { cwd: dir })
     const agent = ctx.agentLoop.create(SessionId('it-clock-cached'), { provider: 'mock', model: 'mock' })
     send(agent, 'hello')
     await waitForIdle(ctx, agent)
@@ -581,7 +597,7 @@ describe('file-mount integration', () => {
     expect(first[0]!.born!).toBeLessThan(1150)
     const second = sources[1]!['mounted'] as { start: number; end: number; born?: number; expired: number }[]
     expect(second[0]!.expired).toBe(1)
-    expect(second[0]!.born!).toBeGreaterThan(12400)
+    expect(second[0]!.born!).toBeGreaterThan(2400)
     expect(resultText(agent, 'c2')).toContain('+L1-3 - range added to context')
   })
 
@@ -634,7 +650,7 @@ describe('file-mount integration', () => {
       toolCallResponse('c2', 'read', { file_path: subjectB, offset: 1, limit: 3 }),
       textResponse('done'),
     ])
-    const ctx = await harness(adapter, { cwd: dir, config: { freshnessThreshold: 0.3 } })
+    const ctx = await harness(adapter, { cwd: dir })
     // Providing the service after boot still resolves the plugin's optional
     // settings seam (it listens for the provider's binding event).
     ctx.provide('settings', fakeSettings)
@@ -644,7 +660,7 @@ describe('file-mount integration', () => {
     await waitForIdle(ctx, agent)
     // The config value is the base layer: the first mount stamps it.
     const first = mountMessages(agent)
-    expect(first[0]!['freshnessThreshold']).toBe(0.3)
+    expect(first[0]!['freshnessThreshold']).toBe(0.4)
     // A runtime tier change flows into the ledger: update the namespace, then
     // the next mount source carries the new effective threshold.
     await fileMountNs().update({ freshnessThreshold: 0.5 })
@@ -653,5 +669,131 @@ describe('file-mount integration', () => {
     const sources = mountMessages(agent)
     expect(sources).toHaveLength(2)
     expect(sources[sources.length - 1]!['freshnessThreshold']).toBe(0.5)
+  })
+
+  it('re-read safety valve: 2nd consecutive full dedup triggers native pass-through and resets counter', async () => {
+    const subject = join(dir, 'safety-valve.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      // Turn 1: initial read (anchors as 'new')
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('turn 1 ok'),
+      // Turn 2: 1st repeated read (intercepted with dedup marker)
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('turn 2 ok'),
+      // Turn 3: 2nd repeated read (safety valve triggers: full content passes through)
+      toolCallResponse('c3', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('turn 3 ok'),
+      // Turn 4: next read intercepts again (counter reset after valve release)
+      toolCallResponse('c4', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('turn 4 ok'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2 } })
+    const agent = ctx.agentLoop.create(SessionId('it-safety-valve'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'read 1')
+    await waitForIdle(ctx, agent)
+    // Turn 1: native read output accepted, injected notice
+    expect(resultText(agent, 'c1')).toContain('1xxx')
+
+    send(agent, 'read 2')
+    await waitForIdle(ctx, agent)
+    // Turn 2: dedup intercepted
+    expect(resultText(agent, 'c2')).toContain('already mounted, not re-added')
+
+    send(agent, 'read 3')
+    await waitForIdle(ctx, agent)
+    // Turn 3: valve triggered, native content passes through
+    expect(resultText(agent, 'c3')).toContain('1xxx')
+    expect(resultText(agent, 'c3')).not.toContain('already mounted')
+
+    const sources = mountMessages(agent)
+    // Turn 1 was 'new', Turn 2 was 'dedup', Turn 3 was 'new' (valve release)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'dedup', 'new'])
+    // The valve-released mount has expired count 1
+    const last = sources[sources.length - 1]!['mounted'] as { start: number; end: number; expired: number }[]
+    expect(last[0]!.expired).toBe(1)
+
+    send(agent, 'read 4')
+    await waitForIdle(ctx, agent)
+    // Turn 4: dedup again (counter was reset)
+    expect(resultText(agent, 'c4')).toContain('already mounted, not re-added')
+  })
+
+  it('safety valve splits straddling segments: inside-window refreshes born, outside-window keeps old born', async () => {
+    const subject = join(dir, 'valve-split.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3', '4', '5', '6'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      // Turn 1: read full file L1-6
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 6 }, 100),
+      textResponse('ok 1'),
+      // Turn 2: read sub-window L1-3 (dedup attempt 1)
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 150),
+      textResponse('ok 2'),
+      // Turn 3: read sub-window L1-3 (valve triggers: pass-through and split)
+      toolCallResponse('c3', 'read', { file_path: subject, offset: 1, limit: 3 }, 200),
+      textResponse('ok 3'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2 } })
+    const agent = ctx.agentLoop.create(SessionId('it-valve-split'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'read all')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read head 1')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read head 2')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'dedup', 'new'])
+    const mountedAfterValve = sources[2]!['mounted'] as { start: number; end: number; born?: number; expired: number; tokens?: number }[]
+    // Split into 2 segments: [1, 3] inside window and [4, 6] outside window
+    expect(geo(mountedAfterValve)).toEqual([
+      { start: 1, end: 3 },
+      { start: 4, end: 6 },
+    ])
+    // Inside segment has expired 1 and fresh born (> 200)
+    expect(mountedAfterValve[0]!.expired).toBe(1)
+    expect(mountedAfterValve[0]!.born).toBeGreaterThan(200)
+    // Outside segment retains expired 0 and older born
+    expect(mountedAfterValve[1]!.expired).toBe(0)
+    expect(mountedAfterValve[1]!.born).toBeLessThan(200)
+  })
+
+  it('valveReads = 0 disables safety valve entirely', async () => {
+    const subject = join(dir, 'valve-disabled.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 1'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 2'),
+      toolCallResponse('c3', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 3'),
+      toolCallResponse('c4', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 4'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 0 } })
+    const agent = ctx.agentLoop.create(SessionId('it-valve-disabled'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'read 1')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read 2')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read 3')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read 4')
+    await waitForIdle(ctx, agent)
+
+    // Turns 2, 3, 4 are all dedup intercepted
+    expect(resultText(agent, 'c2')).toContain('already mounted')
+    expect(resultText(agent, 'c3')).toContain('already mounted')
+    expect(resultText(agent, 'c4')).toContain('already mounted')
   })
 })
