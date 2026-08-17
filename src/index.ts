@@ -389,13 +389,10 @@ export class FileMountService extends Service {
       const spentTokens = estimateTokens(head)
       const fresh = this.stampBornWrite(agent.id, head, want)
       this.mount(store, agent.id, absPath, entry.hash, entry.lineCount, fresh, 0, spentTokens)
-      return {
-        kind: 'accept',
-        additionalContexts: [
-          ...downstream.additionalContexts ?? [],
-          this.contextMessage(head, this.mountSource(store, absPath, entry.hash, entry.lineCount, [want], 'new', 0, spentTokens)),
-        ],
-      }
+      return this.acceptWith(
+        downstream,
+        [this.contextMessage(head, this.mountSource(store, absPath, entry.hash, entry.lineCount, [want], 'new', 0, spentTokens))],
+      )
     } catch {
       return downstream
     }
@@ -509,6 +506,9 @@ export class FileMountService extends Service {
     value: ReadValue,
     downstream: Extract<PostToolDecision, { kind: 'accept' }>,
   ): Promise<PostToolDecision> {
+    // Another post-execute plugin already replaced the canonical value: do not
+    // write the ledger or swap content (value and content are mutually exclusive).
+    if (downstream.value !== undefined) return downstream
     const absPath = normalizeAbsPath(value.path)
     // Plan item 7: excluded paths (e.g. node_modules) are never managed.
     if (this.excludeGlobs.length > 0 && matchesAnyGlob(absPath, this.excludeGlobs)) return downstream
@@ -531,16 +531,13 @@ export class FileMountService extends Service {
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
       const fresh = this.stampBornNew(agent.id, want, lines, windowStart)
       this.mount(store, agent.id, absPath, entry.hash, value.totalLines, fresh, pendingSaved, spentTokens)
-      return {
-        kind: 'accept',
-        additionalContexts: [
-          ...downstream.additionalContexts ?? [],
-          this.contextMessage(
-            head,
-            this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', pendingSaved, spentTokens),
-          ),
-        ],
-      }
+      return this.acceptWith(
+        downstream,
+        [this.contextMessage(
+          head,
+          this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', pendingSaved, spentTokens),
+        )],
+      )
     }
 
     // File changed on disk: try an incremental remount (plan item 9) - diff the
@@ -587,12 +584,11 @@ export class FileMountService extends Service {
       const postMounted = normalizeLedger([...baseMounted, ...inherited.segments])
       this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
       const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'remount', savedTokens, spentTokens)
-      if (downstream.value !== undefined) return downstream
-      return {
-        kind: 'accept',
-        content: [textBlock(renderRemountMarker(value.path, entry.hash, source.mounted, stats))],
-        additionalContexts: [...downstream.additionalContexts ?? [], this.contextMessage(block, source)],
-      }
+      return this.acceptWith(
+        downstream,
+        [this.contextMessage(block, source)],
+        [textBlock(renderRemountMarker(value.path, entry.hash, source.mounted, stats))],
+      )
     }
 
     // Unchanged file: dedup (full coverage) or increment (missing ranges only).
@@ -664,20 +660,12 @@ export class FileMountService extends Service {
           const spentTokens = estimateTokens(head)
           store.replaceSegments(absPath, postMounted, newHistory, 0, spentTokens)
           const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', 0, spentTokens)
-          if (downstream.value !== undefined) return downstream
-          return {
-            kind: 'accept',
-            additionalContexts: [
-              ...downstream.additionalContexts ?? [],
-              this.contextMessage(head, source),
-            ],
-          }
+          return this.acceptWith(downstream, [this.contextMessage(head, source)])
         }
         this.setValveCount(agent.id, absPath, count)
       }
 
       // Full coverage dedup: persist pruned active segments and history
-      if (downstream.value !== undefined) return downstream
       const savedTokens = estimateRangeTokens(lines, windowStart, [want])
       if (savedTokens < this.minSavedTokens) return downstream
       const marked = this.pendingDedup.get(agent.id)?.has(absPath) ?? false
@@ -692,24 +680,21 @@ export class FileMountService extends Service {
         const spentTokens = estimateTokens(noteText)
         store.replaceSegments(absPath, mounted, history, savedTokens, spentTokens)
         const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [], 'dedup', savedTokens, spentTokens)
-        return {
-          kind: 'accept',
-          content: [textBlock(renderDedupMarker(value.path, entry.hash, mounted))],
-          additionalContexts: [
-            ...downstream.additionalContexts ?? [],
-            this.contextMessage(noteText, source),
-          ],
-        }
+        return this.acceptWith(
+          downstream,
+          [this.contextMessage(noteText, source)],
+          [textBlock(renderDedupMarker(value.path, entry.hash, mounted))],
+        )
       }
       // Repeated dedup: quiet. Persist pruned state and merge savings.
       store.replaceSegments(absPath, mounted, history, 0, 0)
       const prior = this.pendingDedup.get(agent.id)!.get(absPath)!
       this.pendingDedup.get(agent.id)!.set(absPath, prior + savedTokens)
-      return {
-        kind: 'accept',
-        content: [textBlock(renderDedupMarker(value.path, entry.hash, mounted))],
-        additionalContexts: [...downstream.additionalContexts ?? []],
-      }
+      return this.acceptWith(
+        downstream,
+        [],
+        [textBlock(renderDedupMarker(value.path, entry.hash, mounted))],
+      )
     }
     this.clearValveCount(agent.id, absPath)
     const block = renderMountBlock({
@@ -731,12 +716,26 @@ export class FileMountService extends Service {
     this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
     const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment', savedTokens, spentTokens)
     const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
-    if (downstream.value !== undefined) return downstream
-    return {
-      kind: 'accept',
-      content: [textBlock(`[file-mount: ${value.path}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`)],
-      additionalContexts: [...downstream.additionalContexts ?? [], this.contextMessage(block, source)],
-    }
+    return this.acceptWith(
+      downstream,
+      [this.contextMessage(block, source)],
+      [textBlock(`[file-mount: ${value.path}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`)],
+    )
+  }
+
+  /**
+   * Fold extra plugin contexts (and optional content) onto a downstream accept
+   * without dropping another listener's additionalContexts. Content is only
+   * set when the caller already ruled out a value replacement.
+   */
+  private acceptWith(
+    downstream: Extract<PostToolDecision, { kind: 'accept' }>,
+    extraContexts: ReturnType<FileMountService['contextMessage']>[],
+    content?: { type: 'text'; text: string }[],
+  ): PostToolDecision {
+    const additionalContexts = [...downstream.additionalContexts ?? [], ...extraContexts]
+    if (content === undefined) return { ...downstream, additionalContexts }
+    return { kind: 'accept', content, additionalContexts }
   }
   /** The structured source state for one injected message. */
   private mountSource(

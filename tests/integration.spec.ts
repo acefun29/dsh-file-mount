@@ -796,4 +796,29 @@ describe('file-mount integration', () => {
     expect(resultText(agent, 'c3')).toContain('already mounted')
     expect(resultText(agent, 'c4')).toContain('already mounted')
   })
+
+  it('does not write the ledger when a downstream post-execute already replaced the read value', async () => {
+    const subject = join(dir, 'downstream-value.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    // Inner waterfall listener: file-mount awaits next() first, so this replacement
+    // is the downstream accept. value and content are mutually exclusive.
+    ctx.on('tools/post-execute', async (exec, result, next) => {
+      const downstream = await next()
+      if (exec.name !== 'read' || result.isError || downstream.kind !== 'accept') return downstream
+      return { kind: 'accept' as const, value: { replaced: true, path: subject } }
+    })
+    const agent = ctx.agentLoop.create(SessionId('it-downstream-value'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    expect(ctx.fileMount.ledger(agent)).toEqual([])
+    expect(mountMessages(agent)).toEqual([])
+    expect(resultText(agent, 'c1')).not.toContain('already mounted')
+  })
 })
