@@ -76,6 +76,76 @@ describe('MountedFilesView', () => {
       .toBe(zh['summary.breakdown'].replace('{saved}', '0').replace('{spent}', '0'))
   })
 
+  it('pins savings and search above a separately scrolling file list', () => {
+    const nodes: ConversationNode[] = [
+      {
+        kind: 'context',
+        seq: 1,
+        time: 1000,
+        content: [{ type: 'text', text: 'block' }],
+        source: {
+          kind: 'plugin',
+          plugin: 'file-mount',
+          form: 'notice',
+          summary: 'mounted L1-50',
+          path: 'src/a.ts',
+          hash: 'abcdef0123456789',
+          totalLines: 100,
+          mounted: [{ start: 1, end: 50 }],
+          added: [{ start: 1, end: 50 }],
+          mountKind: 'new',
+          savedTokens: 0,
+        },
+        provenance: { role: 'inject', label: 'file-mount' },
+        form: 'notice',
+      },
+    ]
+    const { container } = render(<MountedFilesView {...viewProps(nodes)} />)
+    const header = container.querySelector('[data-mount-header]')
+    const body = container.querySelector('[data-mount-body]')
+    expect(header).not.toBeNull()
+    expect(body).not.toBeNull()
+    expect(header!.contains(container.querySelector('[data-mount-summary]')!)).toBe(true)
+    expect(header!.contains(container.querySelector('[data-mount-search]')!)).toBe(true)
+    expect(body!.contains(container.querySelector('[data-mount-row]')!)).toBe(true)
+    expect(header!.nextElementSibling).toBe(body)
+    expect((body as HTMLElement).scrollTop).toBe(0)
+  })
+
+  it('floors negative net savings at 0 in the header and row', () => {
+    const nodes: ConversationNode[] = [
+      {
+        kind: 'context',
+        seq: 1,
+        time: 1000,
+        content: [{ type: 'text', text: 'block' }],
+        source: {
+          kind: 'plugin',
+          plugin: 'file-mount',
+          form: 'notice',
+          summary: 'mounted L1-50',
+          path: 'src/a.ts',
+          hash: 'abcdef0123456789',
+          totalLines: 100,
+          mounted: [{ start: 1, end: 50 }],
+          added: [{ start: 1, end: 50 }],
+          mountKind: 'new',
+          savedTokens: 0,
+          spentTokens: 22,
+        },
+        provenance: { role: 'inject', label: 'file-mount' },
+        form: 'notice',
+      },
+    ]
+    const { container } = render(<MountedFilesView {...viewProps(nodes)} />)
+    expect(container.querySelector('[data-mount-net-total]')?.textContent)
+      .toBe(zh['summary.netTotal'].replace('{n}', '0'))
+    expect(container.querySelector('[data-mount-net]')?.textContent)
+      .toBe(zh['row.net'].replace('{n}', '0'))
+    expect(container.querySelector('[data-mount-cny]')?.textContent)
+      .toBe(zh['summary.cny'].replace('{n}', '0.00'))
+  })
+
   it('re-renders when the folded ledger changes', () => {
     const a: ConversationNode[] = []
     const b: ConversationNode[] = [

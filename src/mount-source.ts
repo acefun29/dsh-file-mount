@@ -7,7 +7,7 @@
  * Freshness (pressure × depth): each segment carries `born` (context
  * position in input tokens at mount time) and `expired` (how many times the
  * content expired and was re-read). Pressure stays 0 until L exceeds
- * 0.85 W, so mounts last most of the session. After pinAfter expiries
+ * 0.95 W, so mounts last most of the session. After pinAfter expiries
  * (default 1) the segment stays on the ledger.
  */
 import type { ExpiredSegment, LedgerSegment, MountKind } from './types.ts'
@@ -175,7 +175,7 @@ export interface PruneResult {
 }
 
 export interface FreshnessOptions {
-  /** Fraction of W below which pressure is 0 (default 0.85). Ignored when `safeTokens` is set. */
+  /** Fraction of W below which pressure is 0 (default 0.95). Ignored when `safeTokens` is set. */
   safeRatio?: number
   /** Absolute Lsafe override for tests / rare config; takes precedence over `safeRatio`. */
   safeTokens?: number
@@ -191,7 +191,7 @@ export interface FreshnessOptions {
 
 export const DEFAULT_FRESHNESS_CONFIG = {
   threshold: 0.6,
-  safeRatio: 0.85,
+  safeRatio: 0.95,
   pinAfter: 1,
   contextWindow: 128_000,
   valveReads: 2,
@@ -203,7 +203,7 @@ function clamp01(x: number): number {
 
 /**
  * Pressure × depth freshness: mounts stay fresh until the prompt is near
- * the window (Lsafe = 0.85 W by default). Pinned segments (expired >= pinAfter)
+ * the window (Lsafe = 0.95 W by default). Pinned segments (expired >= pinAfter)
  * always score 1.
  *
  * pressure = sqrt(clamp01((L - Lsafe) / (W - Lsafe)))

@@ -1,7 +1,7 @@
 /** Mounted-files dashboard: coverage map, search, sort, net savings + a rough
  * CNY figure (plan items 16 + 17), matching the DSH tab styling. */
 
-import { useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import {
@@ -25,6 +25,36 @@ function splitPath(path: string): { dir: string; name: string } {
   const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   if (i < 0) return { dir: '', name: path }
   return { dir: path.slice(0, i), name: path.slice(i + 1) }
+}
+
+/** Displayed net savings: first-mount notice overhead is not shown as a loss. */
+function displayNet(saved: number, spent: number): number {
+  const net = saved - spent
+  return net > 0 ? net : 0
+}
+
+/**
+ * Pin the dashboard at the top of its pane. The conversation host often
+ * stick-to-bottoms like a chat, so opening this tab used to land on the
+ * last file instead of the savings header and path search.
+ */
+function scrollPanelToTop(root: HTMLElement | null, list: HTMLElement | null): void {
+  if (list) list.scrollTop = 0
+  if (root) root.scrollTop = 0
+  const header = root?.querySelector<HTMLElement>('[data-mount-header]')
+  if (header && typeof header.scrollIntoView === 'function') {
+    header.scrollIntoView({ block: 'start', inline: 'nearest' })
+  }
+  let node = root?.parentElement ?? null
+  while (node && node !== document.body && node !== document.documentElement) {
+    const overflowY = getComputedStyle(node).overflowY
+    const scrollable = overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay'
+    if (scrollable && node.scrollHeight > node.clientHeight + 1) {
+      node.scrollTop = 0
+      break
+    }
+    node = node.parentElement
+  }
 }
 
 /** Map a freshness level to its locale key (typed lookup). */
@@ -62,7 +92,28 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
   const [showHelp, setShowHelp] = useState(false)
   // Freshness segment rows are expanded by default; clicking collapses one file.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const rootRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.6
+
+  useLayoutEffect(() => {
+    const pin = () => scrollPanelToTop(rootRef.current, listRef.current)
+    pin()
+    const frame = requestAnimationFrame(pin)
+    let visible = true
+    const io = typeof IntersectionObserver === 'undefined'
+      ? undefined
+      : new IntersectionObserver((entries) => {
+        const now = entries.some((entry) => entry.isIntersecting && entry.intersectionRatio > 0)
+        if (now && !visible) pin()
+        visible = now
+      })
+    if (io && rootRef.current) io.observe(rootRef.current)
+    return () => {
+      cancelAnimationFrame(frame)
+      io?.disconnect()
+    }
+  }, [sessionId])
 
   const { savedTotal, spentTotal, netTotal } = useMemo(() => {
     let saved = 0
@@ -71,11 +122,11 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
       saved += mount.savedTokens
       spent += mount.spentTokens
     }
-    return { savedTotal: saved, spentTotal: spent, netTotal: saved - spent }
+    return { savedTotal: saved, spentTotal: spent, netTotal: displayNet(saved, spent) }
   }, [mounts])
   if (mounts.length === 0) {
     return (
-      <div className={css.root}>
+      <div ref={rootRef} className={css.root}>
         <div className={css.empty} data-mount-empty>{t('list.empty')}</div>
       </div>
     )
@@ -87,7 +138,7 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
     .sort((a, b) => sortBy === 'path'
       ? a.path.localeCompare(b.path)
       : (b.savedTokens - b.spentTokens) - (a.savedTokens - a.spentTokens))
-  const cny = (Math.max(0, netTotal) / 1_000_000) * CNY_PER_MILLION_TOKENS
+  const cny = (netTotal / 1_000_000) * CNY_PER_MILLION_TOKENS
 
   const toggle = (path: string) => {
     const next = new Set(collapsed)
@@ -97,66 +148,69 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
   }
 
   return (
-    <div className={css.root} data-mount-list>
-      <div
-        className={css.summary + (netTotal > 0 ? ' ' + css.summaryPositive : ' ' + css.summaryNeutral)}
-        data-mount-summary
-        title={t('summary.breakdown').replace('{saved}', String(savedTotal)).replace('{spent}', String(spentTotal))}
-      >
-        <span data-mount-net-total>{t('summary.netTotal').replace('{n}', String(netTotal))}</span>
-        <span className={css.cny} data-mount-cny>{t('summary.cny').replace('{n}', cny.toFixed(2))}</span>
-      </div>
-      <div className={css.toolbar}>
-        <input
-          className={css.search}
-          data-mount-search
-          type="search"
-          placeholder={t('list.searchPlaceholder')}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <select
-          className={css.sort}
-          data-mount-sort
-          value={sortBy}
-          onChange={(event) => setSortBy(event.target.value as 'net' | 'path')}
+    <div ref={rootRef} className={css.root} data-mount-list>
+      <div className={css.header} data-mount-header>
+        <div
+          className={css.summary + (netTotal > 0 ? ' ' + css.summaryPositive : ' ' + css.summaryNeutral)}
+          data-mount-summary
+          title={t('summary.breakdown').replace('{saved}', String(savedTotal)).replace('{spent}', String(spentTotal))}
         >
-          <option value="net">{t('list.sortNet')}</option>
-          <option value="path">{t('list.sortPath')}</option>
-        </select>
-        <button
-          type="button"
-          className={css.tierHelp + (showHelp ? ' ' + css.tierHelpActive : '')}
-          onClick={() => setShowHelp(!showHelp)}
-          title={t('help.title')}
-          aria-label={t('help.title')}
-        >
-          ?
-        </button>
-      </div>
-      {showHelp && (
-        <div className={css.helpCard} data-mount-help-card>
-          <div className={css.helpHeader}>
-            <span>{t('help.title')}</span>
-            <button type="button" className={css.helpClose} onClick={() => setShowHelp(false)}>{t('help.close')}</button>
-          </div>
-          <div className={css.helpSection}>
-            <div className={css.helpSectionTitle}>{t('help.modelTitle')}</div>
-            <div className={css.helpSectionDesc}>{t('help.modelDesc')}</div>
-          </div>
-          <div className={css.helpSection}>
-            <div className={css.helpSectionTitle}>{t('help.savingsTitle')}</div>
-            <div className={css.helpSectionDesc}>{t('help.savingsDesc')}</div>
-          </div>
+          <span data-mount-net-total>{t('summary.netTotal').replace('{n}', String(netTotal))}</span>
+          <span className={css.cny} data-mount-cny>{t('summary.cny').replace('{n}', cny.toFixed(2))}</span>
         </div>
-      )}
+        <div className={css.toolbar}>
+          <input
+            className={css.search}
+            data-mount-search
+            type="search"
+            placeholder={t('list.searchPlaceholder')}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <select
+            className={css.sort}
+            data-mount-sort
+            value={sortBy}
+            onChange={(event) => setSortBy(event.target.value as 'net' | 'path')}
+          >
+            <option value="net">{t('list.sortNet')}</option>
+            <option value="path">{t('list.sortPath')}</option>
+          </select>
+          <button
+            type="button"
+            className={css.tierHelp + (showHelp ? ' ' + css.tierHelpActive : '')}
+            onClick={() => setShowHelp(!showHelp)}
+            title={t('help.title')}
+            aria-label={t('help.title')}
+          >
+            ?
+          </button>
+        </div>
+        {showHelp && (
+          <div className={css.helpCard} data-mount-help-card>
+            <div className={css.helpHeader}>
+              <span>{t('help.title')}</span>
+              <button type="button" className={css.helpClose} onClick={() => setShowHelp(false)}>{t('help.close')}</button>
+            </div>
+            <div className={css.helpSection}>
+              <div className={css.helpSectionTitle}>{t('help.modelTitle')}</div>
+              <div className={css.helpSectionDesc}>{t('help.modelDesc')}</div>
+            </div>
+            <div className={css.helpSection}>
+              <div className={css.helpSectionTitle}>{t('help.savingsTitle')}</div>
+              <div className={css.helpSectionDesc}>{t('help.savingsDesc')}</div>
+            </div>
+          </div>
+        )}
+      </div>
+      <div ref={listRef} className={css.list} data-mount-body>
       {visible.map((mount) => {
         const lines = mountedLines(mount)
         const pct = mount.totalLines > 0 ? Math.min(100, Math.round((lines / mount.totalLines) * 100)) : 0
         const isCollapsed = collapsed.has(mount.path)
         const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, foldedThreshold, seg.tokens, { expired: seg.expired }))
         const worst = worstFreshness(levels)
-        const netDiff = mount.savedTokens - mount.spentTokens
+        const netDiff = displayNet(mount.savedTokens, mount.spentTokens)
         const { dir, name } = splitPath(mount.path)
         const coverageTitle = t('row.coverageTitle')
         return (
@@ -252,6 +306,7 @@ export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
           </div>
         )
       })}
+      </div>
     </div>
   )
 }

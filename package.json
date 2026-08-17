@@ -1,11 +1,28 @@
 {
   "name": "dsh-file-mount",
   "description": "DeepSeek Harness plugin: incremental file mounting with read dedupe, version-aware invalidation, and a mounted-files view (host half + web client half)",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
+  "bin": {
+    "dsh-file-mount": "./scripts/install-cli.mjs"
+  },
   "types": "lib/types/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/acefun29/dsh-file-mount.git"
+  },
+  "homepage": "https://github.com/acefun29/dsh-file-mount#readme",
+  "bugs": {
+    "url": "https://github.com/acefun29/dsh-file-mount/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -21,14 +38,17 @@
     "lib/index.js",
     "lib/client.js",
     "lib/types/**/*.d.ts",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "logo.png",
+    "scripts/install-cli.mjs"
   ],
   "scripts": {
     "build": "tsc && tsdown",
-    "prepare": "tsc && tsdown",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "prepack": "pnpm test && pnpm typecheck"
+    "prepack": "pnpm run build",
+    "prepublishOnly": "pnpm test && pnpm typecheck",
+    "dsh:install": "node scripts/install-cli.mjs"
   },
   "dsh": {
     "bundle": {
@@ -47,6 +67,7 @@
     "deepseek",
     "harness",
     "dsh",
+    "dsh-plugin",
     "cordis",
     "plugin",
     "context",
@@ -70,6 +91,21 @@
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.5",
     "@deepseek-ai/schemastery": "^3.18.1",
     "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-client-locale": { "optional": true },
+    "@deepseek-ai/dsh-client-runtime": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-conversation": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-primitives": { "optional": true },
+    "@deepseek-ai/dsh-client-ui-slots": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-session-query": { "optional": true },
+    "@deepseek-ai/dsh-tools": { "optional": true },
+    "@deepseek-ai/schemastery": { "optional": true },
+    "react": { "optional": true }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

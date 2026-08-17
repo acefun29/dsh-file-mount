@@ -142,10 +142,14 @@ describe('pruneExpired', () => {
     expect(r.history).toEqual([])
   })
 
-  it('does not prune mid-session mounts under the default 0.85 W safe band', () => {
+  it('does not prune mid-session mounts under the default 0.95 W safe band', () => {
     const r = pruneExpired([{ start: 1, end: 5, born: 10_000, expired: 0 }], 50_000)
     expect(r.active).toHaveLength(1)
     expect(r.history).toEqual([])
+    // 0.90 W is still inside the 0.95 safe band (would expire under 0.85).
+    const stillSafe = pruneExpired([{ start: 1, end: 5, born: 10_000, expired: 0 }], 115_000)
+    expect(stillSafe.active).toHaveLength(1)
+    expect(stillSafe.history).toEqual([])
   })
 
   it('prunes deep content once L is near the window', () => {

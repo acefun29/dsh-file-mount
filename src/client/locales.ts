@@ -73,9 +73,9 @@ export const zh: Record<FileMountKey, string> = {
   'freshness.expiredTitle': '该段已过期过 N 次；重新读取后恢复新鲜，历史计数保留',
   'help.title': '新鲜度与节省机制说明',
   'help.modelTitle': '压力 × 深度新鲜度与安全阀',
-  'help.modelDesc': '上下文未到窗口的 85% 时挂载不过期；接近上限后越靠前的内容才会重发，且每段最多重发一次。连续 2 次全覆盖去重触发安全阀放行。找不到上文内容时，先 file_mount_forget 再 read。',
+  'help.modelDesc': '上下文未到窗口的 95% 时挂载不过期；接近上限后越靠前的内容才会重发，且每段最多重发一次。连续 2 次全覆盖去重触发安全阀放行。找不到上文内容时，先 file_mount_forget 再 read。',
   'help.savingsTitle': '净节省 Token 说明',
-  'help.savingsDesc': '净节省 = 去重省下的 Token − 插件状态通知开销。初次挂载时仅有微小的通知开销（约 20-30 tokens），多轮对话中一旦触发去重或增量补发，净节省将迅速转为大幅正收益。',
+  'help.savingsDesc': '净节省 = 去重省下的 Token − 插件状态通知开销；为负时界面显示 0（初次挂载只有纸条开销，还没去重）。多轮对话中一旦触发去重或增量补发，净节省会转为正值。',
   'help.close': '收起说明',
 }
 
@@ -108,8 +108,8 @@ export const en: Record<FileMountKey, string> = {
   'freshness.expiredTitle': 'This segment expired N times; a re-read refreshes it but keeps the count',
   'help.title': 'Freshness & Token Savings Guide',
   'help.modelTitle': 'Pressure × Depth Freshness & Safety Valve',
-  'help.modelDesc': 'Mounts stay fresh until the prompt reaches 85% of the window. Near the cap, only deep content is re-sent, and each segment is re-sent at most once. 2 consecutive full dedups trigger the safety valve. If the content is not in the conversation, call file_mount_forget then read again.',
+  'help.modelDesc': 'Mounts stay fresh until the prompt reaches 95% of the window. Near the cap, only deep content is re-sent, and each segment is re-sent at most once. 2 consecutive full dedups trigger the safety valve. If the content is not in the conversation, call file_mount_forget then read again.',
   'help.savingsTitle': 'Net Savings Accounting',
-  'help.savingsDesc': 'Net Savings = Deduplicated Tokens − Plugin Notice Overhead. Initial mounts have a tiny overhead (~20-30 tokens); once dedup or increment triggers in multi-turn dialogues, net savings turn strongly positive.',
+  'help.savingsDesc': 'Net savings = deduplicated tokens − plugin notice overhead; the UI floors negatives at 0 (a first mount has only notice cost, no dedup yet). Once dedup or increment triggers, the figure turns positive.',
   'help.close': 'Close',
 }

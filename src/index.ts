@@ -86,7 +86,7 @@ export interface Config {
   freshnessEnabled?: boolean
   /** Score below which a segment counts as expired (0..1, default 0.6). */
   freshnessThreshold?: number
-  /** Fraction of the context window below which pressure is 0 (default 0.85). */
+  /** Fraction of the context window below which pressure is 0 (default 0.95). */
   safeRatio?: number
   /** Absolute Lsafe override; when set, takes precedence over safeRatio. */
   safeTokens?: number
@@ -112,7 +112,7 @@ export const Config: z<Config> = z.object({
   statsFile: z.string(),
   freshnessEnabled: z.boolean().default(true),
   freshnessThreshold: z.number().step(0.01).min(0).max(1).default(0.6),
-  safeRatio: z.number().min(0).max(1).default(0.85),
+  safeRatio: z.number().min(0).max(1).default(0.95),
   safeTokens: z.number().step(1).min(0),
   pinAfter: z.number().step(1).min(0).default(1),
   contextWindow: z.number().step(1).min(1).default(128_000),
@@ -224,7 +224,7 @@ export class FileMountService extends Service {
     this.statsFile = resolved.statsFile
     this.freshnessEnabled = resolved.freshnessEnabled ?? true
     this.freshnessThreshold = resolved.freshnessThreshold ?? 0.6
-    this.safeRatio = resolved.safeRatio ?? 0.85
+    this.safeRatio = resolved.safeRatio ?? 0.95
     this.safeTokens = resolved.safeTokens
     this.pinAfter = resolved.pinAfter ?? 1
     this.contextWindow = resolved.contextWindow ?? 128_000
