@@ -35,6 +35,21 @@ describe('diffLines', () => {
     const b = ['x', 'y']
     expect(diffLines(a, b)).toEqual(diffLines(a, b))
   })
+
+  it('matches the unique middle when only the first and last lines change', () => {
+    // 1100 unique lines → middle DP would exceed MAX_MIDDLE_CELLS without anchors.
+    const n = 1100
+    const oldFps = Array.from({ length: n }, (_, i) => `L${i}`)
+    const newFps = oldFps.slice()
+    oldFps[0] = 'HEAD'
+    oldFps[n - 1] = 'TAIL'
+    newFps[0] = 'HEAD2'
+    newFps[n - 1] = 'TAIL2'
+    const mapped = diffLines(oldFps, newFps)
+    expect(mapped[0]).toBeUndefined()
+    expect(mapped[n - 1]).toBeUndefined()
+    for (let i = 1; i < n - 1; i++) expect(mapped[i]).toBe(i + 1)
+  })
 })
 
 describe('remapSegments', () => {
