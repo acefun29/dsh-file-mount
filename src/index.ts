@@ -4,11 +4,12 @@
  * One post-execute interception point owns the whole model-facing surface:
  * after a successful text `read`, the plugin verifies the file identity
  * (stat-verified cache), folds the returned window against the per-session
- * mount ledger, and returns a PostToolDecision that (a) replaces the result
- * content with a short marker when the window adds nothing new, and (b)
- * injects the new ranges as plugin-sourced additionalContexts. The canonical
- * tool value is preserved throughout, so UI read cards and the audit log
- * stay intact.
+ * mount ledger, and returns a PostToolDecision that (a) puts missing or
+ * changed line bodies into the durable tool-result content (so cancel cannot
+ * drop them), (b) replaces a fully-covered window with a short marker, and
+ * (c) injects a head-only ledger notice as plugin-sourced additionalContexts.
+ * The canonical tool value is preserved throughout, so UI read cards and the
+ * audit log stay intact.
  *
  * The ledger's durable carrier is the injected message SOURCE (structured,
  * merge-extensible JSON on a standard `user/message` event), so resumed
@@ -154,6 +155,12 @@ function asPathValue(value: unknown): string | undefined {
 
 function textBlock(text: string): { type: 'text'; text: string } {
   return { type: 'text', text }
+}
+
+/** Lines after the marker-head of a mount block (the durable missing-range body). */
+function mountBlockBody(block: string): string {
+  const newline = block.indexOf('\n')
+  return newline === -1 ? '' : block.slice(newline + 1)
 }
 
 /**
@@ -575,7 +582,8 @@ export class FileMountService extends Service {
       const covered = subtract(missing, want)
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
       const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
-      const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
+      const marker = renderRemountMarker(value.path, entry.hash, normalize([...baseMounted, ...missing]), stats)
+      const spentTokens = estimateTokens(marker)
       // Fresh born metadata on the re-sent ranges; history (expired counts)
       // survives the hash change and is inherited by overlapping re-mounts.
       const blockHead = markerHead(value.path, entry.hash, normalize([...baseMounted, ...missing]))
@@ -584,11 +592,9 @@ export class FileMountService extends Service {
       const postMounted = normalizeLedger([...baseMounted, ...inherited.segments])
       this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
       const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'remount', savedTokens, spentTokens)
-      return this.acceptWith(
-        downstream,
-        [this.contextMessage(block, source)],
-        [textBlock(renderRemountMarker(value.path, entry.hash, source.mounted, stats))],
-      )
+      const body = mountBlockBody(block)
+      const content = body.length > 0 ? `${marker}\n${body}` : marker
+      return this.acceptWith(downstream, [this.contextMessage(marker, source)], [textBlock(content)])
     }
 
     // Unchanged file: dedup (full coverage) or increment (missing ranges only).
@@ -708,19 +714,16 @@ export class FileMountService extends Service {
     const covered = subtract(missing, want)
     const pendingSaved = this.takePendingSaved(agent.id, absPath)
     const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
-    const spentTokens = Math.max(0, estimateTokens(block) - estimateRangeTokens(lines, windowStart, missing))
     const blockHead = markerHead(value.path, entry.hash, normalize([...mounted, ...missing]))
+    const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
+    const note = `[file-mount: ${value.path}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`
+    const spentTokens = estimateTokens(note)
     const fresh = this.stampBornRanges(agent.id, blockHead, missing, lines, windowStart)
     const inherited = inheritHistory(fresh, history)
     const postMounted = normalizeLedger([...mounted, ...inherited.segments])
     this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
     const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment', savedTokens, spentTokens)
-    const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
-    return this.acceptWith(
-      downstream,
-      [this.contextMessage(block, source)],
-      [textBlock(`[file-mount: ${value.path}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`)],
-    )
+    return this.acceptWith(downstream, [this.contextMessage(note, source)], [textBlock(block)])
   }
 
   /**

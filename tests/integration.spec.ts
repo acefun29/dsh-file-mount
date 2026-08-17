@@ -125,12 +125,12 @@ describe('file-mount integration', () => {
       ? dedupNote.data.content[0].text
       : '').toContain('saved ≈ 40 tokens')
 
-    // c3 (partial): short content marker; the missing tail rides the injected message.
-    expect(resultText(agent, 'c3')).toContain('+L5-6')
-    // The result is only the short marker: the native read body wrapper is gone.
+    // c3 (partial): missing body is on the durable tool result; the notice is head-only.
+    expect(resultText(agent, 'c3')).toContain('--- L5-6 ---')
+    // The result is the mount block: the native read body wrapper is gone.
     expect(resultText(agent, 'c3')).not.toContain('<content>')
 
-    // The injected increment message carries the missing body in model view.
+    // The injected increment message is a ledger declaration, not the body.
     const increment = agent.session.events.find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
       && e.data.source['mountKind'] === 'increment')
@@ -138,7 +138,8 @@ describe('file-mount integration', () => {
       && increment.data.content[0] !== undefined && increment.data.content[0].type === 'text'
       ? increment.data.content[0].text
       : ''
-    expect(incrementText).toContain('--- L5-6 ---')
+    expect(incrementText).toContain('+L5-6')
+    expect(incrementText).not.toContain('--- L5-6 ---')
 
     // Ledger: one file, hash verified, ranges 1-6, cumulative savings.
     const ledger = ctx.fileMount.ledger(agent)
@@ -149,6 +150,39 @@ describe('file-mount integration', () => {
     ])
     expect(ledger[0]!.savedTokens).toBe(60)
     
+  })
+
+  it('keeps increment body on the tool result so cancel cannot drop it', async () => {
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 4 }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: file, offset: 3, limit: 4 }),
+      toolCallResponse('c3', 'read', { file_path: file, offset: 5, limit: 2 }),
+      textResponse('third turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = ctx.agentLoop.create(SessionId('it-cancel-increment'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    const off = ctx.on('session/event', (session, event) => {
+      if (session !== agent.session) return
+      if (event.type === 'tool/result' && event.data.message.content[0]?.toolCallId === CallId('c2')) {
+        agent.cancel({ kind: 'user' })
+      }
+    })
+    send(agent, 'read more')
+    await waitForIdle(ctx, agent)
+    off()
+
+    expect(resultText(agent, 'c2')).toContain('--- L5-6 ---')
+
+    send(agent, 'read tail')
+    await waitForIdle(ctx, agent)
+    const later = resultText(agent, 'c3') ?? ''
+    const bodyOnPriorResult = (resultText(agent, 'c2') ?? '').includes('--- L5-6 ---')
+    const resent = later.includes('--- L5-6 ---') || later.includes('<content>')
+    expect(bodyOnPriorResult || resent).toBe(true)
   })
 
   it('passes tiny reads through untouched when below the savings threshold', async () => {
@@ -226,6 +260,8 @@ describe('file-mount integration', () => {
     ])
     expect(sources[1]!['savedTokens']).toBe(50)
     expect(resultText(agent, 'c2')).toContain('file changed: +1/-1 lines (~5 unchanged) since last mount')
+    expect(resultText(agent, 'c2')).toContain('--- L3 ---')
+    expect(resultText(agent, 'c2')).toContain('CHANGED')
 
     const remount = agent.session.events.find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
@@ -234,8 +270,9 @@ describe('file-mount integration', () => {
       && remount.data.content[0] !== undefined && remount.data.content[0].type === 'text'
       ? remount.data.content[0].text
       : ''
-    expect(remountText).toContain('--- L3 ---')
-    expect(remountText).toContain('CHANGED')
+    expect(remountText).toContain('file changed')
+    expect(remountText).not.toContain('--- L3 ---')
+    expect(remountText).not.toContain('CHANGED')
 
     const ledger = ctx.fileMount.ledger(agent)
     expect(geo(ledger[0]!.segments)).toEqual([
@@ -558,7 +595,7 @@ describe('file-mount integration', () => {
     expect(geo(second)).toEqual([{ start: 1, end: 3 }])
     expect(second[0]!.expired).toBe(1)
     expect(second[0]!.born).toBeGreaterThan(310)
-    expect(resultText(agent, 'c2')).toContain('+L1-3 - range added to context')
+    expect(resultText(agent, 'c2')).toContain('--- L1-3 ---')
   })
 
   it('freshness clock counts cached input: expiry follows the FULL context, not the uncached delta', async () => {
@@ -598,7 +635,7 @@ describe('file-mount integration', () => {
     const second = sources[1]!['mounted'] as { start: number; end: number; born?: number; expired: number }[]
     expect(second[0]!.expired).toBe(1)
     expect(second[0]!.born!).toBeGreaterThan(2400)
-    expect(resultText(agent, 'c2')).toContain('+L1-3 - range added to context')
+    expect(resultText(agent, 'c2')).toContain('--- L1-3 ---')
   })
 
   it('freshness threshold follows the settings namespace when the host provides one', async () => {

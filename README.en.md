@@ -6,7 +6,7 @@ Ported from [piwpi](https://github.com/earendil-works/pi-mono)'s context-mount m
 
 ## What it does
 
-- **Model side**: already-mounted ranges are never re-sent (dedup marker); new content flows only for the missing ranges; file edits re-send only the changed lines (append-only logs only re-send the new tail); files the AI just wrote are mounted as already known and read for free; a `file_mount_forget` tool lets the model force a fresh re-read.
+- **Model side**: already-mounted ranges are never re-sent (dedup marker); missing or changed lines ride the durable tool result (increment / remount), and the plugin notice is a ledger declaration only; file edits re-send only the changed lines (append-only logs only re-send the new tail); files the AI just wrote are mounted as already known and read for free; a `file_mount_forget` tool lets the model force a fresh re-read.
 - **UI side**: the Mounted Files tab is a dashboard; each file row expands into its **segments**, each with a **freshness bar** (green=fresh / yellow=aging / orange=stale / red=expired / grey=unknown) and an **expired-count badge**; plus progress bars, search, sorting, and the net-savings/CNY header; remounted rows carry a "changed, remounted" badge.
 - **Savings accounting**: CJK characters count as 1 token each, other characters as chars ÷ 4; both saved tokens and the plugin's own note overhead are tracked, and the UI shows the NET figure; optional cross-session totals persist to a `statsFile`.
 
@@ -47,7 +47,7 @@ One package, two halves: `dsh.bundle.patch` mounts the host plugin row; the `dsh
 
 The plugin sits on the `tools/post-execute` interception point, dispatched by tool name:
 
-1. **read**: derives the window from the canonical value; a stat-verified cache (mtime+size fast path + sha256) confirms identity; then: full coverage replaces the result with a dedup marker (only the FIRST dedup note per file between real messages — repeats are silent and their savings merge into the next message); partial coverage injects only the missing ranges; a hash change diffs the stored line draft and re-sends only the changed lines (unchanged lines just shift), falling back to a whole-window remount without a draft or for huge diffs.
+1. **read**: derives the window from the canonical value; a stat-verified cache (mtime+size fast path + sha256) confirms identity; then: full coverage replaces the result with a dedup marker (only the FIRST dedup note per file between real messages — repeats are silent and their savings merge into the next message); partial coverage and hash-change remounts put the missing/changed **body on the durable tool result** (so `cancel` clearing the inbox can drop only the ledger notice — next read treats it as unmounted) and a head-only ledger notice on `additionalContexts`; a hash change diffs the stored line draft and re-sends only the changed lines (unchanged lines just shift), falling back to a whole-window remount without a draft or for huge diffs. The first `new` mount still keeps the native read body plus a head-only notice.
 2. **write**: the whole file is mounted as already known (free re-reads); the cache identity is invalidated.
 3. **edit**: invalidates the cache identity; the next read uses the line-level diff.
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
@@ -69,7 +69,7 @@ Path identity: absolute path + `realpath` (symlinks unify to the real file) + ca
 
 ## FAQ
 
-- **Why does the read card degrade to a generic card?** The plugin replaces the model-visible result text (dedup marker / increment block) at post-execute; the canonical value stays intact, but the card renders from the result text.
+- **Why does the read card degrade to a generic card?** The plugin replaces the model-visible result text (dedup marker / increment or remount body) at post-execute; the canonical value stays intact, but the card renders from the result text.
 - **How do I keep the plugin away from some files?** `excludeGlobs` for paths (e.g. `**/node_modules/**`), `maxManagedBytes` for the size cap; excluded/huge files pass through untouched.
 - **How accurate are the numbers?** Estimates: CJK char ≈ 1 token, others 4 chars ≈ 1 token; the UI shows net (saved − note overhead) and a rough CNY figure (¥1 per million tokens).
 - **Can the model force a re-read?** Call `file_mount_forget` to invalidate a file's ledger entry.

@@ -205,7 +205,10 @@ describe('file-mount adversarial', () => {
       { start: 4, end: 6 },
     ])
     expect(resultText(agent, 'c2')).toContain('file changed: +1/-1 lines (~5 unchanged)')
-    // The injected block carries ONLY the new line 3.
+    expect(resultText(agent, 'c2')).toContain('--- L3 ---')
+    expect(resultText(agent, 'c2')).toContain('CHANGED')
+    expect(resultText(agent, 'c2')).not.toContain(LINE(1))
+    // The injected notice is head-only; the changed body rides the tool result.
     const remount = agent.session.events.find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
       && e.data.source['mountKind'] === 'remount')
@@ -213,9 +216,9 @@ describe('file-mount adversarial', () => {
       && remount.data.content[0] !== undefined && remount.data.content[0].type === 'text'
       ? remount.data.content[0].text
       : ''
-    expect(remountText).toContain('--- L3 ---')
-    expect(remountText).toContain('CHANGED')
-    expect(remountText).not.toContain(LINE(1))
+    expect(remountText).toContain('file changed')
+    expect(remountText).not.toContain('--- L3 ---')
+    expect(remountText).not.toContain('CHANGED')
   })
 
   it('parked dedup savings ride the remount after a hash change', async () => {
