@@ -38,7 +38,7 @@ export function markerHead(path: string, hash: string, mounted: Segment[]): stri
 
 /** Full-coverage read: the window adds nothing new. */
 export function renderDedupMarker(path: string, hash: string, mounted: Segment[]): string {
-  return `${markerHead(path, hash, mounted)} - already mounted, not re-added`
+  return `${markerHead(path, hash, mounted)} - already mounted, not re-added. If this content is not in the conversation above, call file_mount_forget then read the file again.`
 }
 
 /** Line counts a diff produced (added/removed/unchanged), for the remount note. */

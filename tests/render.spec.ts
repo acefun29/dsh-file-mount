@@ -49,9 +49,9 @@ describe('markerHead', () => {
 })
 
 describe('renderDedupMarker', () => {
-  it('states that nothing was re-added', () => {
+  it('states that nothing was re-added and how to recover if the content is missing', () => {
     expect(renderDedupMarker('src/a.ts', 'abc12345', [{ start: 20, end: 80 }]))
-      .toBe('[file-mount: src/a.ts hash:abc12345 mounted:L20-80] - already mounted, not re-added')
+      .toBe('[file-mount: src/a.ts hash:abc12345 mounted:L20-80] - already mounted, not re-added. If this content is not in the conversation above, call file_mount_forget then read the file again.')
   })
 })
 

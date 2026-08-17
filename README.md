@@ -52,7 +52,7 @@ npx @deepseek-ai/dsh --profile web
 3. **edit**：只作废缓存指纹，下一次读走行级 diff 补发。
 4. 挂载状态结构化写入注入消息的 source（标准 `user/message` 事件），恢复重放与浏览器折叠共用同一载体、同一套合并规则（`mount-source.ts`）。
 5. 压缩感知：识别 DSH 标准压缩 checkpoint（source `{kind:'plugin', plugin:'compact'}` 的 `sourceEventSeqs`），被 shadow 的挂载消息不再计入账本。
-6. 模型可调用 `file_mount_forget` 工具主动作废某个文件的账（强制重读）。
+6. 模型可调用 `file_mount_forget` 工具主动作废某个文件的账（强制重读）。去重 marker 会提示：上文找不到内容时，先 forget 再 read。
 7. **新鲜度（注意力衰减与 U 形评分）**：每个挂载段记录挂载时的上下文位置与 token 估算（最近一轮请求的**全部输入 token——未缓存 + 缓存命中之和**（DSH 的 usage 是 DISJOINT 计数，`inputTokens` 只含未命中缓存部分）+ 注入块估算）；段在上下文中的位置按 U 形注意力曲线计算综合得分（两端头尾因首因/近因效应保留高分，中段注意力塌陷区得分降低，大文件享有体积保护）。**得分低于阈值的段自动摘除账本**（下次 read 重新发送，token 换可靠性），重新挂载时过期次数 +1，UI 显示徽标。**重读安全阀**：当模型对同一文件连续发起全拦截重读达到 `valveReads`（默认 2）次时，触发原生透传放行，同时对窗口内段执行分裂与更新。**阈值可在面板实时调整**：工具栏提供宽松(0.2)/标准(0.3)/敏感(0.4)/激进(0.5)四挡，改动立即影响显示，并在宿主提供 settings 服务时写入 `file-mount` 命名空间（持久化，后续过期判定与挂载消息同步使用新值）。
 路径身份：绝对路径 + `realpath`（软链接统一到真实文件）+ 大小写折叠（按文件系统实测，Windows/Mac 默认折叠）。
 
@@ -72,7 +72,7 @@ npx @deepseek-ai/dsh --profile web
 - **为什么读文件时 UI 的 read 卡片变成通用卡片？** 插件在 post-execute 替换了模型可见的结果文本（去重 marker / 增量或重挂正文）；canonical value 原样保留，但卡片按结果文本渲染，所以降级为通用卡片。
 - **怎么让插件少管一些文件？** `excludeGlobs` 配排除名单（如 `**/node_modules/**`），`maxManagedBytes` 配大文件上限；名单外/超大文件原样放行。
 - **省的数字准吗？** 是估算：中文 1 字 ≈ 1 token，其他 4 字符 ≈ 1 token；界面显示净值（省下的 − 纸条花掉的），并按每百万 token ≈ ¥1 粗略折算人民币。
-- **模型想强制重读一个文件？** 调 `file_mount_forget` 工具作废该文件的账，下次读整本重发。
+- **模型想强制重读一个文件？** 调 `file_mount_forget` 工具作废该文件的账，下次读整本重发。去重结果也会写明：上文找不到就先 forget 再 read。
 - **跨会话统计怎么看？** 配置 `statsFile` 后自动累计到该文件，可通过 `fileMount.stats()` 读取；界面展示暂缓。
 
 ## 开发

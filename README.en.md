@@ -52,7 +52,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 3. **edit**: invalidates the cache identity; the next read uses the line-level diff.
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
 5. Compaction awareness: canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are skipped.
-6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read).
+6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read). The dedup marker tells it to forget then re-read when the mounted content is not in the conversation.
 7. **Freshness (attention decay & U-curve scoring)**: every mounted segment records its context position and token estimate at mount time (last request FULL input tokens — uncached + cacheRead + cacheWrite; DSH usage counts are disjoint, `inputTokens` alone is the uncached portion only — plus the block estimate); segment position in context is scored via a U-shaped attention curve (both head and tail retain high scores via primacy/recency, mid-context attention valley scores lower, large files receive volume protection). **Segments scoring below the threshold leave the ledger** (the next read re-sends them — tokens spent for reliability) and the count is kept: a re-mount inherits expired+1, shown as a badge. **Re-read safety valve**: when the model triggers consecutive full-dedup intercepts on the same file reaching `valveReads` (default 2), native read output passes through and in-window segments are split and refreshed. **The threshold is adjustable live from the panel**: the toolbar offers lenient (0.2) / standard (0.3) / sensitive (0.4) / aggressive (0.5), immediately updating views and persisting via settings.
 Path identity: absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold).
 
@@ -72,7 +72,7 @@ Path identity: absolute path + `realpath` (symlinks unify to the real file) + ca
 - **Why does the read card degrade to a generic card?** The plugin replaces the model-visible result text (dedup marker / increment or remount body) at post-execute; the canonical value stays intact, but the card renders from the result text.
 - **How do I keep the plugin away from some files?** `excludeGlobs` for paths (e.g. `**/node_modules/**`), `maxManagedBytes` for the size cap; excluded/huge files pass through untouched.
 - **How accurate are the numbers?** Estimates: CJK char ≈ 1 token, others 4 chars ≈ 1 token; the UI shows net (saved − note overhead) and a rough CNY figure (¥1 per million tokens).
-- **Can the model force a re-read?** Call `file_mount_forget` to invalidate a file's ledger entry.
+- **Can the model force a re-read?** Call `file_mount_forget` to invalidate a file's ledger entry. The dedup marker also says: if the content is not in the conversation above, forget then read again.
 - **Where are cross-session totals?** Configure `statsFile`; totals accumulate there and are readable via `fileMount.stats()`. The UI display is deferred.
 
 ## Development

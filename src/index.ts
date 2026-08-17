@@ -340,7 +340,7 @@ export class FileMountService extends Service {
     const service = this
     ctx.tools.register(defineTool({
       name: 'file_mount_forget',
-      description: 'Forget the file-mount ledger entry for a file so the next read re-sends its content fresh (useful when the diff-based update could not see an external change).',
+      description: 'Forget the file-mount ledger entry for a file so the next read re-sends its content. Call this when a previous read said the file was already mounted but you cannot find that content in the conversation above, then read the file again.',
       parameters: {
         file_path: { type: 'string', required: true, description: 'Path whose mount ledger entry should be forgotten.' },
       },
