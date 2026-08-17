@@ -58,7 +58,7 @@ npx @deepseek-ai/dsh --profile web
 5. 压缩感知：识别 DSH 标准压缩 checkpoint（source `{kind:'plugin', plugin:'compact'}` 的 `sourceEventSeqs`），被 shadow 的挂载消息不再计入账本。
 6. 模型可调用 `file_mount_forget` 工具主动作废某个文件的账（强制重读）。去重 marker 会提示：上文找不到内容时，先 forget 再 read。
 7. **新鲜度（压力 × 深度）**：每个挂载段记录载体消息的 `seq`；sweep 用该 seq 之前可见消息的前缀和现算 `pos`（压缩后自动正确，旧消息只有 `born` 时把 `born` 当 `pos`）。`L` 优先用 usage 三字段之和，没有则用前缀和；`W` 来自 `session.requestContext()?.contextWindow`，没有则用配置默认。**上下文未到 0.85×窗口时不过期**；接近窗口上限后越靠前的内容分数越低。**得分低于阈值的段摘除账本**，过期一次（`pinAfter` 默认 1）后钉住。**重读安全阀**仍可用。新鲜度不再提供界面四挡。
-路径身份：绝对路径 + `realpath`（软链接统一到真实文件）+ 大小写折叠（按文件系统实测，Windows/Mac 默认折叠）。
+路径身份：账本用绝对路径 + `realpath`（软链接统一到真实文件）+ 大小写折叠（按文件系统实测，Windows/Mac 默认折叠）。模型可见的纸条 head 用相对工作目录的路径（正斜杠），工作目录取自会话 `header.cwd`，没有则用 `dsh-fs-local` 的 `cwd`。
 
 ## 已知限制
 
@@ -83,7 +83,7 @@ npx @deepseek-ai/dsh --profile web
 
 ```sh
 pnpm install
-pnpm test        # vitest（146 用例：单元 + 真实 read/write 循环集成 + 持久化往返 + 压缩感知 + 新鲜度 + 客户端组件）
+pnpm test        # vitest（187 用例：单元 + 真实 read/write 循环集成 + 持久化往返 + 压缩感知 + 新鲜度 + 客户端组件）
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown（lib/index.js / lib/client.js）
 ```

@@ -7,6 +7,7 @@
  *
  * Formats:
  *   head    [file-mount: <path> hash:<h8> mounted:L20-80]
+ *           path is relative to the workspace cwd (posix slashes)
  *   dedup   head + note (zero content re-added)
  *   block   head + per-segment "--- Ls-e ---" headers + "N: " prefixed lines
  */
@@ -19,8 +20,10 @@ export function formatRange(start: number, end: number): string {
 
 /**
  * Shared marker head: identity + short hash + a compact mounted summary.
- * A few ranges are listed outright; many ranges collapse to a line/range
- * count so the note never grows with the number of mounted ranges (item 12).
+ * `path` is the model-facing path (workspace-relative when the host can
+ * resolve a cwd). A few ranges are listed outright; many ranges collapse
+ * to a line/range count so the note never grows with the number of mounted
+ * ranges (item 12).
  */
 export function markerHead(path: string, hash: string, mounted: Segment[]): string {
   const normalized = normalize(mounted)

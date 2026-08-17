@@ -114,7 +114,9 @@ describe('file-mount integration', () => {
     expect(sources[2]!['summary']).toBe('+L5-6 - saved ≈ 20 tokens')
 
     // c2 (full coverage): short dedup marker, nothing re-added.
+    expect(resultText(agent, 'c2')).toContain('[file-mount: subject.txt hash:')
     expect(resultText(agent, 'c2')).toContain('mounted:L1-4] - already mounted, not re-added')
+    expect(resultText(agent, 'c2')).not.toContain(dir.replace(/\\/g, '/'))
 
     // The dedup decision also leaves a short note message in the log.
     const dedupNote = agent.session.events.find((e) => e.type === 'user/message'
@@ -138,6 +140,7 @@ describe('file-mount integration', () => {
       && increment.data.content[0] !== undefined && increment.data.content[0].type === 'text'
       ? increment.data.content[0].text
       : ''
+    expect(incrementText).toContain('[file-mount: subject.txt]')
     expect(incrementText).toContain('+L5-6')
     expect(incrementText).not.toContain('--- L5-6 ---')
 
@@ -150,6 +153,31 @@ describe('file-mount integration', () => {
     ])
     expect(ledger[0]!.savedTokens).toBe(60)
     
+  })
+
+  it('shows marker heads relative to the fs cwd, not the absolute temp path', async () => {
+    const nested = join(dir, 'pkg', 'inner.txt')
+    await mkdir(join(dir, 'pkg'), { recursive: true })
+    await writeFile(nested, ['a', 'b', 'c', 'd'].map((n) => n + 'x'.repeat(39)).join('\n') + '\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: nested, offset: 1, limit: 4 }),
+      toolCallResponse('c2', 'read', { file_path: nested, offset: 1, limit: 4 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 0 } })
+    const agent = ctx.agentLoop.create(
+      SessionId('it-rel-path'),
+      { provider: 'mock', model: 'mock' },
+      { cwd: dir },
+    )
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    expect(resultText(agent, 'c2')).toContain('[file-mount: pkg/inner.txt hash:')
+    expect(resultText(agent, 'c2')).not.toContain(dir.replace(/\\/g, '/'))
+    const sources = mountMessages(agent)
+    expect(sources[0]!['path']).toBe(normalizeAbsPath(nested))
+    expect(ctx.fileMount.ledger(agent).map((f) => f.absPath)).toEqual([normalizeAbsPath(nested)])
   })
 
   it('keeps increment body on the tool result so cancel cannot drop it', async () => {

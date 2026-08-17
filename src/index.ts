@@ -35,7 +35,7 @@ import { matchesAnyGlob } from './glob.ts'
 import { FileContentCache } from './file-cache.ts'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { inheritHistory, normalizeLedger, parseMountSource, pruneExpired } from './mount-source.ts'
-import { normalizeAbsPath } from './paths.ts'
+import { displayPath, normalizeAbsPath } from './paths.ts'
 import { normalize, subtract, type LineRange } from './ranges.ts'
 import {
   formatRange,
@@ -52,7 +52,7 @@ export { FileContentCache } from './file-cache.ts'
 export { MountStore, type LedgerRecord } from './store.ts'
 export { normalize, subtract, type LineRange } from './ranges.ts'
 export { hashBuffer } from './hash.ts'
-export { normalizeAbsPath } from './paths.ts'
+export { displayPath, normalizeAbsPath } from './paths.ts'
 export {
   formatRange,
   markerHead,
@@ -157,6 +157,13 @@ function asPathValue(value: unknown): string | undefined {
   const v = value as Record<string, unknown>
   if (typeof v['path'] !== 'string' || v['path'].length === 0) return undefined
   return v['path']
+}
+
+/** Duck-typed `ctx.fs.config.cwd` from `@deepseek-ai/dsh-fs-local` (optional). */
+function pluginFsCwd(ctx: Context): string | undefined {
+  const fs = ctx.get('fs') as { config?: { cwd?: unknown } } | undefined
+  const cwd = fs?.config?.cwd
+  return typeof cwd === 'string' && cwd.length > 0 ? cwd : undefined
 }
 
 function textBlock(text: string): { type: 'text'; text: string } {
@@ -339,7 +346,8 @@ export class FileMountService extends Service {
       if (entry.lineCount < 1) return downstream
       const store = await this.storeFor(agent)
       const want: LineRange = { start: 1, end: entry.lineCount }
-      const head = markerHead(path, entry.hash, [want])
+      const shown = this.markerPath(agent, path)
+      const head = markerHead(shown, entry.hash, [want])
       const spentTokens = estimateTokens(head)
       const fresh = this.stampBornWrite(agent.id, head, want)
       this.mount(store, agent.id, absPath, entry.hash, entry.lineCount, fresh, 0, spentTokens)
@@ -465,6 +473,7 @@ export class FileMountService extends Service {
     // write the ledger or swap content (value and content are mutually exclusive).
     if (downstream.value !== undefined) return downstream
     const absPath = normalizeAbsPath(value.path)
+    const shown = this.markerPath(agent, value.path)
     // Plan item 7: excluded paths (e.g. node_modules) are never managed.
     if (this.excludeGlobs.length > 0 && matchesAnyGlob(absPath, this.excludeGlobs)) return downstream
     const lookup = await this.cache.lookup(absPath)
@@ -481,7 +490,7 @@ export class FileMountService extends Service {
     // carries the ledger to UI folds and resume replay.
     if (existing === undefined) {
       this.clearValveCount(agent.id, absPath)
-      const head = markerHead(value.path, entry.hash, [want])
+      const head = markerHead(shown, entry.hash, [want])
       const spentTokens = estimateTokens(head)
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
       const fresh = this.stampBornNew(agent.id, want, lines, windowStart)
@@ -520,7 +529,7 @@ export class FileMountService extends Service {
       }
       const missing = subtract(baseMounted, want)
       const block = renderMountBlock({
-        path: value.path,
+        path: shown,
         hash: entry.hash,
         mounted: normalize([...baseMounted, ...missing]),
         windowStart,
@@ -530,11 +539,11 @@ export class FileMountService extends Service {
       const covered = subtract(missing, want)
       const pendingSaved = this.takePendingSaved(agent.id, absPath)
       const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
-      const marker = renderRemountMarker(value.path, entry.hash, normalize([...baseMounted, ...missing]), stats)
+      const marker = renderRemountMarker(shown, entry.hash, normalize([...baseMounted, ...missing]), stats)
       const spentTokens = estimateTokens(marker)
       // Fresh born metadata on the re-sent ranges; history (expired counts)
       // survives the hash change and is inherited by overlapping re-mounts.
-      const blockHead = markerHead(value.path, entry.hash, normalize([...baseMounted, ...missing]))
+      const blockHead = markerHead(shown, entry.hash, normalize([...baseMounted, ...missing]))
       const fresh = this.stampBornRanges(agent.id, blockHead, missing, lines, windowStart)
       const inherited = inheritHistory(fresh, existing.expiredHistory)
       const postMounted = normalizeLedger([...baseMounted, ...inherited.segments])
@@ -621,7 +630,7 @@ export class FileMountService extends Service {
           const freshSeg = this.stampBornNew(agent.id, want, lines, windowStart)[0]!
           freshSeg.expired = maxOverlapExpired
           const postMounted = normalizeLedger([...outsideSegments, freshSeg])
-          const head = markerHead(value.path, entry.hash, postMounted)
+          const head = markerHead(shown, entry.hash, postMounted)
           const spentTokens = estimateTokens(head)
           store.replaceSegments(absPath, postMounted, newHistory, pendingSaved, spentTokens)
           const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', pendingSaved, spentTokens)
@@ -639,14 +648,14 @@ export class FileMountService extends Service {
           this.pendingDedup.set(agent.id, perAgent)
         }
         perAgent.set(absPath, 0)
-        const noteText = `${markerHead(value.path, entry.hash, mounted)} - already mounted, saved ≈ ${savedTokens} tokens`
+        const noteText = `${markerHead(shown, entry.hash, mounted)} - already mounted, saved ≈ ${savedTokens} tokens`
         const spentTokens = estimateTokens(noteText)
         store.replaceSegments(absPath, mounted, history, savedTokens, spentTokens)
         const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [], 'dedup', savedTokens, spentTokens)
         return this.acceptWith(
           downstream,
           [this.contextMessage(noteText, source)],
-          [textBlock(renderDedupMarker(value.path, entry.hash, mounted))],
+          [textBlock(renderDedupMarker(shown, entry.hash, mounted))],
         )
       }
       // Repeated dedup: quiet. Persist pruned state and merge savings.
@@ -656,13 +665,13 @@ export class FileMountService extends Service {
       return this.acceptWith(
         downstream,
         [],
-        [textBlock(renderDedupMarker(value.path, entry.hash, mounted))],
+        [textBlock(renderDedupMarker(shown, entry.hash, mounted))],
       )
     }
     this.clearValveCount(agent.id, absPath)
     const covered = subtract(missing, want)
     const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
-    const note = `[file-mount: ${value.path}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`
+    const note = `[file-mount: ${shown}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`
     const spentTokens = estimateTokens(note)
     const coveredSaved = estimateRangeTokens(lines, windowStart, covered)
     const pendingPeek = this.pendingDedup.get(agent.id)?.get(absPath) ?? 0
@@ -673,14 +682,14 @@ export class FileMountService extends Service {
     const pendingSaved = this.takePendingSaved(agent.id, absPath)
     const savedTokens = coveredSaved + pendingSaved
     const block = renderMountBlock({
-      path: value.path,
+      path: shown,
       hash: entry.hash,
       mounted: normalize([...mounted, ...missing]),
       windowStart,
       lines,
       missing,
     })
-    const blockHead = markerHead(value.path, entry.hash, normalize([...mounted, ...missing]))
+    const blockHead = markerHead(shown, entry.hash, normalize([...mounted, ...missing]))
     const fresh = this.stampBornRanges(agent.id, blockHead, missing, lines, windowStart)
     const inherited = inheritHistory(fresh, history)
     const postMounted = normalizeLedger([...mounted, ...inherited.segments])
@@ -936,6 +945,18 @@ export class FileMountService extends Service {
   /** Session-advertised context window, or the configured default. */
   private windowW(agent: Agent): number {
     return agent.session.requestContext()?.contextWindow ?? this.contextWindow
+  }
+
+  /** Workspace cwd: session header first, then the local fs plugin config. */
+  private workspaceCwd(agent: Agent): string | undefined {
+    const sessionCwd = agent.session.header?.cwd
+    if (typeof sessionCwd === 'string' && sessionCwd.length > 0) return sessionCwd
+    return pluginFsCwd(this.ctx)
+  }
+
+  /** Marker-head path relative to the workspace; ledger identity stays absolute. */
+  private markerPath(agent: Agent, filePath: string): string {
+    return displayPath(filePath, this.workspaceCwd(agent))
   }
 
   /** Tokens reported on one assistant/message (DISJOINT usage sum). */

@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 /** Cached case-insensitivity probe result (null = not probed yet). */
 let caseInsensitive: boolean | null = null
@@ -41,4 +41,31 @@ export function normalizeAbsPath(absPath: string): string {
     resolved = resolve(absPath)
   }
   return isCaseInsensitive() ? resolved.toLowerCase() : resolved
+}
+
+function toPosix(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+function foldPath(p: string): string {
+  return process.platform === 'win32' ? p.toLowerCase() : p
+}
+
+/**
+ * Model-facing path for marker heads: relative to `cwd` with forward slashes
+ * when the file is inside the workspace. Files outside `cwd` (or when `cwd`
+ * is missing) stay absolute, also posix-ified. Ledger identity stays on
+ * {@link normalizeAbsPath}.
+ */
+export function displayPath(filePath: string, cwd: string | undefined): string {
+  if (cwd === undefined || cwd.length === 0) return toPosix(filePath)
+  const abs = resolve(cwd, filePath)
+  const base = resolve(cwd)
+  const rel = relative(foldPath(base), foldPath(abs))
+  if (rel === '') return '.'
+  const relPosix = toPosix(rel)
+  if (isAbsolute(rel) || relPosix === '..' || relPosix.startsWith('../')) return toPosix(abs)
+  const prefixLen = base.length + (abs.length > base.length ? 1 : 0)
+  if (prefixLen > abs.length) return toPosix(abs)
+  return toPosix(abs.slice(prefixLen))
 }

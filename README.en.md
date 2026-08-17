@@ -58,7 +58,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 5. Compaction awareness: canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are skipped.
 6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read). The dedup marker tells it to forget then re-read when the mounted content is not in the conversation.
 7. **Freshness (pressure × depth)**: each mounted segment records its carrier message `seq`; sweep recomputes `pos` as the prefix sum of visible events before that seq (correct after compaction; legacy `born` is used as `pos` when `seq` is missing). `L` is the DISJOINT usage sum when present, otherwise the prefix sum; `W` comes from `session.requestContext()?.contextWindow`, else the configured default. **Nothing expires before 0.85×window**; near the cap, deeper content scores lower. **Segments scoring below the threshold leave the ledger**; after one expiry (`pinAfter` default 1) the segment stays mounted. **Re-read safety valve** still applies. Freshness is no longer adjustable from the dashboard.
-Path identity: absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold).
+Path identity: ledger keys are absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold). Marker heads shown to the model use a path relative to the workspace cwd (forward slashes); cwd comes from the session `header.cwd`, else `dsh-fs-local`'s `cwd`.
 
 ## Known limitations
 
