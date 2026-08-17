@@ -73,7 +73,8 @@ function lcsMatches(a: string[], b: string[]): number[] {
  * Remap mounted segments (old coordinates) through a diff into new coordinates.
  * Surviving lines keep their ranges (contiguous survivors stay contiguous);
  * changed or deleted lines drop out. Adjacent surviving runs merge and carry
- * their freshness metadata through (earliest born, max expired).
+ * their freshness metadata through (earliest born, max expired) and a
+ * line-count-proportional token estimate.
  */
 export function remapSegments(segments: readonly LedgerSegment[], oldToNew: readonly (number | undefined)[]): LedgerSegment[] {
   const out: LedgerSegment[] = []
@@ -91,10 +92,16 @@ export function remapSegments(segments: readonly LedgerSegment[], oldToNew: read
         end = oldToNew[j - 1]!
         j++
       }
+      const newLen = end - mapped + 1
+      const oldLen = seg.end - seg.start + 1
+      const tokens = seg.tokens !== undefined && oldLen > 0
+        ? Math.round(seg.tokens * newLen / oldLen)
+        : undefined
       out.push({
         start: mapped,
         end,
         ...seg.born !== undefined ? { born: seg.born } : {},
+        ...tokens !== undefined && tokens > 0 ? { tokens } : {},
         expired: seg.expired,
       })
       i = j

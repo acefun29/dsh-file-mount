@@ -79,6 +79,8 @@ export class FileContentCache {
   private pinned = new Map<string, Set<string>>()
   /** In-flight reads by path: concurrent lookups share one read. */
   private inFlight = new Map<string, Promise<CacheLookup | null>>()
+  /** In-flight lookup generations: invalidate bumps so a completing read cannot write a stale entry back. */
+  private epoch = new Map<string, number>()
   private readonly capacity: number
   private readonly ttlMs: number
   private readonly maxFingerprintBytes: number
@@ -125,6 +127,7 @@ export class FileContentCache {
   invalidate(absPath: string): void {
     this.byPath.delete(absPath)
     this.inFlight.delete(absPath)
+    this.epoch.set(absPath, (this.epoch.get(absPath) ?? 0) + 1)
   }
 
   /**
@@ -172,20 +175,23 @@ export class FileContentCache {
     // Miss, expiry, or stale: (re)read, sharing one in-flight read per path.
     let pending = this.inFlight.get(absPath)
     if (pending === undefined) {
+      const epochAtStart = this.epoch.get(absPath) ?? 0
       pending = (async () => {
         let buf: Buffer
         try {
           buf = await this.readFile(absPath)
         } catch {
-          this.byPath.delete(absPath)
+          if ((this.epoch.get(absPath) ?? 0) === epochAtStart) this.byPath.delete(absPath)
           return null
         }
         const entry = this.buildEntry(st, buf)
-        this.byPath.set(absPath, { entry, lastVerified: Date.now(), stale: false })
-        this.evict()
         const previous = cached?.entry
         const changed = previous !== undefined && previous.hash !== entry.hash
-        return changed ? { current: entry, previous, changed: true } : { current: entry, changed: false }
+        const result = changed ? { current: entry, previous, changed: true as const } : { current: entry, changed: false as const }
+        if ((this.epoch.get(absPath) ?? 0) !== epochAtStart) return result
+        this.byPath.set(absPath, { entry, lastVerified: Date.now(), stale: false })
+        this.evict()
+        return result
       })().finally(() => { this.inFlight.delete(absPath) })
       this.inFlight.set(absPath, pending)
     }

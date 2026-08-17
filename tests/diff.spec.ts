@@ -59,6 +59,14 @@ describe('remapSegments', () => {
     const segs = remapSegments([{ start: 1, end: 2 }, { start: 4, end: 5 }], [1, 2, undefined, 3, 4])
     expect(segs).toEqual([{ start: 1, end: 4 }])
   })
+
+  it('scales tokens onto surviving lines by line count', () => {
+    const segs = remapSegments(
+      [{ start: 1, end: 4, tokens: 40, expired: 0 }],
+      [1, undefined, 2, 3],
+    )
+    expect(segs).toEqual([{ start: 1, end: 3, tokens: 30, expired: 0 }])
+  })
 })
 
 describe('diffStats', () => {

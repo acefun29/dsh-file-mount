@@ -234,6 +234,26 @@ describe('FileContentCache', () => {
     await cache.get(a)
     expect(reads).toBe(2)
   })
+
+  it('does not write back a lookup that finished after invalidate', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let reads = 0
+    const cache = new FileContentCache({
+      readFile: async (path) => {
+        reads++
+        if (reads === 1) await gate
+        return readFile(path)
+      },
+    })
+    const inflight = cache.lookup(a)
+    await vi.waitFor(() => { expect(reads).toBe(1) })
+    cache.invalidate(a)
+    release()
+    await inflight
+    await cache.lookup(a)
+    expect(reads).toBe(2)
+  })
 })
 
 describe('fingerprintLines', () => {
