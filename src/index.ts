@@ -616,18 +616,23 @@ export class FileMountService extends Service {
     }
     const missing = subtract(mounted, want)
     if (missing.length === 0) {
-      // Safety valve check (Section 3.2): if the model re-reads an already
-      // mounted window repeatedly, trigger native pass-through on the valveReads-th full intercept.
+      // Full coverage: tiny windows pass through without counting as an
+      // intercept, so they cannot trip the safety valve early.
+      const savedTokens = estimateRangeTokens(lines, windowStart, [want])
+      if (savedTokens < this.minSavedTokens) return downstream
+
+      // Safety valve: the Nth consecutive real intercept (valveReads) passes
+      // the native read through and refreshes in-window segments.
       if (this.valveReads > 0) {
         const count = this.getValveCount(agent.id, absPath) + 1
         if (count >= this.valveReads) {
           this.clearValveCount(agent.id, absPath)
-          this.takePendingSaved(agent.id, absPath)
+          const pendingSaved = this.takePendingSaved(agent.id, absPath)
           const outsideSegments: LedgerSegment[] = []
           const newHistory: ExpiredSegment[] = [...history]
           let maxOverlapExpired = 0
 
-          for (const seg of existing.segments) {
+          for (const seg of mounted) {
             if (seg.end < want.start || seg.start > want.end) {
               outsideSegments.push(seg)
             } else {
@@ -640,20 +645,22 @@ export class FileMountService extends Service {
               })
               maxOverlapExpired = Math.max(maxOverlapExpired, seg.expired + 1)
               if (seg.start < overlapStart) {
+                const tokens = this.scaleSegmentTokens(seg, seg.start, overlapStart - 1)
                 outsideSegments.push({
                   start: seg.start,
                   end: overlapStart - 1,
                   ...seg.born !== undefined ? { born: seg.born } : {},
-                  ...seg.tokens !== undefined ? { tokens: estimateRangeTokens(lines, windowStart, [{ start: seg.start, end: overlapStart - 1 }]) } : {},
+                  ...tokens !== undefined ? { tokens } : {},
                   expired: seg.expired,
                 })
               }
               if (seg.end > overlapEnd) {
+                const tokens = this.scaleSegmentTokens(seg, overlapEnd + 1, seg.end)
                 outsideSegments.push({
                   start: overlapEnd + 1,
                   end: seg.end,
                   ...seg.born !== undefined ? { born: seg.born } : {},
-                  ...seg.tokens !== undefined ? { tokens: estimateRangeTokens(lines, windowStart, [{ start: overlapEnd + 1, end: seg.end }]) } : {},
+                  ...tokens !== undefined ? { tokens } : {},
                   expired: seg.expired,
                 })
               }
@@ -665,16 +672,14 @@ export class FileMountService extends Service {
           const postMounted = normalizeLedger([...outsideSegments, freshSeg])
           const head = markerHead(value.path, entry.hash, postMounted)
           const spentTokens = estimateTokens(head)
-          store.replaceSegments(absPath, postMounted, newHistory, 0, spentTokens)
-          const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', 0, spentTokens)
+          store.replaceSegments(absPath, postMounted, newHistory, pendingSaved, spentTokens)
+          const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', pendingSaved, spentTokens)
           return this.acceptWith(downstream, [this.contextMessage(head, source)])
         }
         this.setValveCount(agent.id, absPath, count)
       }
 
       // Full coverage dedup: persist pruned active segments and history
-      const savedTokens = estimateRangeTokens(lines, windowStart, [want])
-      if (savedTokens < this.minSavedTokens) return downstream
       const marked = this.pendingDedup.get(agent.id)?.has(absPath) ?? false
       if (!marked) {
         let perAgent = this.pendingDedup.get(agent.id)
@@ -790,6 +795,17 @@ export class FileMountService extends Service {
   private mount(store: MountStore, agentId: string, absPath: string, hash: string, totalLines: number, segments: LedgerSegment[], savedTokens: number, spentTokens: number, history: ExpiredSegment[] = []): void {
     store.mount({ absPath, hash, totalLines, segments, savedTokens, spentTokens, expiredHistory: history })
     this.pinFor(agentId, absPath)
+  }
+
+  /** Scale a segment's token estimate onto a sub-range by line count.
+   * Out-of-window fragments have no lines to re-estimate; writing 0 would
+   * look like "unknown volume" and must be avoided. */
+  private scaleSegmentTokens(seg: LedgerSegment, start: number, end: number): number | undefined {
+    if (seg.tokens === undefined) return undefined
+    const oldLen = seg.end - seg.start + 1
+    if (oldLen <= 0 || end < start) return undefined
+    const scaled = Math.round(seg.tokens * (end - start + 1) / oldLen)
+    return scaled > 0 ? scaled : undefined
   }
 
   /** Stamp fresh-born and tokens on a newly mounted single range (initial read or safety-valve remount). */

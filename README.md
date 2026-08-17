@@ -34,7 +34,7 @@ npx @deepseek-ai/dsh --profile web
     capacity: 32             # 文件身份缓存容量（挂载中文件不受淘汰影响）
     ttlMs: 300000            # 缓存安全阀：同 stat 内容被改的兜底重读间隔
     maxPinnedFiles: 256      # 单个会话最多钉住多少个挂载文件
-    minSavedTokens: 16       # 去重至少省这么多 token 才拦截，低于就原生透传
+    minSavedTokens: 16       # 去重至少省这么多 token 才拦截，低于就原生透传（也不计入安全阀次数）
     maxFingerprintBytes: 1000000   # 超过此大小的文件不留行级底稿（改动时整本重挂）
     maxManagedBytes: 16777216      # 超过此大小的文件不接管，原样放行
     excludeGlobs: ['**/node_modules/**']  # 这些路径永远原样放行

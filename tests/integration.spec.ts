@@ -796,9 +796,125 @@ describe('file-mount integration', () => {
     // Inside segment has expired 1 and fresh born (> 200)
     expect(mountedAfterValve[0]!.expired).toBe(1)
     expect(mountedAfterValve[0]!.born).toBeGreaterThan(200)
-    // Outside segment retains expired 0 and older born
+    // Outside segment retains expired 0 and older born; tokens stay proportional
+    // (never rewritten as 0 just because the fragment is outside the window).
     expect(mountedAfterValve[1]!.expired).toBe(0)
     expect(mountedAfterValve[1]!.born).toBeLessThan(200)
+    expect(mountedAfterValve[1]!.tokens).toBe(30)
+  })
+
+  it('tiny full-coverage reads below minSavedTokens do not advance the valve count', async () => {
+    const subject = join(dir, 'valve-threshold.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 1'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 2'),
+      toolCallResponse('c3', 'read', { file_path: subject, offset: 1, limit: 1 }),
+      textResponse('ok 3'),
+      toolCallResponse('c4', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 4'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2, minSavedTokens: 12 } })
+    const agent = ctx.agentLoop.create(SessionId('it-valve-threshold'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'read 1')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read 2')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read tiny')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read 4')
+    await waitForIdle(ctx, agent)
+
+    expect(resultText(agent, 'c2')).toContain('already mounted')
+    expect(resultText(agent, 'c3')).toContain('<content>')
+    // Tiny pass-through must not count as an intercept. With valveReads=2 the
+    // next full read is therefore the 2nd intercept (valve native), not a
+    // post-reset dedup (which is what would happen if the tiny read had
+    // already tripped the valve).
+    expect(resultText(agent, 'c4')).toContain('1xxx')
+    expect(resultText(agent, 'c4')).not.toContain('already mounted')
+    expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new', 'dedup', 'new'])
+  })
+
+  it('valve release folds parked silent-dedup savings into savedTokens', async () => {
+    const subject = join(dir, 'valve-parked.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 1'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 2'),
+      toolCallResponse('c3', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 3'),
+      toolCallResponse('c4', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('ok 4'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 3 } })
+    const agent = ctx.agentLoop.create(SessionId('it-valve-parked'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'read 1')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read 2')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read 3')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read 4')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'dedup', 'new'])
+    // Quiet intercept parked 30 tokens; the valve notice carries them.
+    expect(sources[2]!['savedTokens']).toBe(30)
+    expect(ctx.fileMount.ledger(agent)[0]!.savedTokens).toBe(60)
+    expect(resultText(agent, 'c4')).toContain('1xxx')
+    expect(resultText(agent, 'c4')).not.toContain('already mounted')
+  })
+
+  it('valve walks pruned segments so an expired range is not resurrected', async () => {
+    const subject = join(dir, 'valve-prune.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3', '4', '5', '6'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      textWithUsage('hi', 100),
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }, 200),
+      textWithUsage('ok 1', 250),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 4, limit: 3 }, 400),
+      textWithUsage('ok 2', 420),
+      textWithUsage('grow', 500),
+      toolCallResponse('c3', 'read', { file_path: subject, offset: 4, limit: 3 }, 510),
+      textWithUsage('ok 3', 520),
+      toolCallResponse('c4', 'read', { file_path: subject, offset: 4, limit: 3 }, 530),
+      textWithUsage('ok 4', 540),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2 } })
+    const agent = ctx.agentLoop.create(SessionId('it-valve-prune'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'hello')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read head')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read tail')
+    await waitForIdle(ctx, agent)
+    send(agent, 'grow context')
+    await waitForIdle(ctx, agent)
+    send(agent, 'reread tail 1')
+    await waitForIdle(ctx, agent)
+    send(agent, 'reread tail 2')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'increment', 'dedup', 'new'])
+    const afterValve = sources[3]!['mounted'] as { start: number; end: number }[]
+    expect(geo(afterValve)).toEqual([{ start: 4, end: 6 }])
+    expect(geo(ctx.fileMount.ledger(agent)[0]!.segments)).toEqual([{ start: 4, end: 6 }])
   })
 
   it('valveReads = 0 disables safety valve entirely', async () => {
