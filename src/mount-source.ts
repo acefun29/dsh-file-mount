@@ -19,11 +19,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Validate one mounted ledger segment: geometry required, meta optional. */
 function isValidLedgerSegment(value: unknown): value is LedgerSegment {
   if (!isRecord(value)) return false
-  const { start, end, born, tokens, expired } = value
+  const { start, end, born, tokens, expired, seq } = value
   if (typeof start !== 'number' || typeof end !== 'number'
     || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)
     || start < 1 || end < start) return false
   if (born !== undefined && (typeof born !== 'number' || !Number.isSafeInteger(born) || born < 0)) return false
+  if (seq !== undefined && (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0)) return false
   if (tokens !== undefined && (typeof tokens !== 'number' || !Number.isSafeInteger(tokens) || tokens < 0)) return false
   if (expired !== undefined && (typeof expired !== 'number' || !Number.isSafeInteger(expired) || expired < 0)) return false
   return true
@@ -58,6 +59,7 @@ export function normalizeLedger(segments: readonly LedgerSegment[]): LedgerSegme
       // never goes backwards.
       cur.end = Math.max(cur.end, seg.end)
       if (seg.born !== undefined) cur.born = seg.born
+      if (seg.seq !== undefined) cur.seq = seg.seq
       if (seg.tokens !== undefined) cur.tokens = seg.tokens
       if (seg.expired > cur.expired) cur.expired = seg.expired
     } else if (
@@ -121,6 +123,7 @@ export function parseMountSource(source: unknown): ParsedMountSource | undefined
         start: seg.start,
         end: seg.end,
         ...seg.born !== undefined ? { born: seg.born } : {},
+        ...seg.seq !== undefined ? { seq: seg.seq } : {},
         ...seg.tokens !== undefined ? { tokens: seg.tokens } : {},
         expired: seg.expired ?? 0,
       }))),

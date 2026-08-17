@@ -57,7 +57,7 @@ npx @deepseek-ai/dsh --profile web
 4. 挂载状态结构化写入注入消息的 source（标准 `user/message` 事件），恢复重放与浏览器折叠共用同一载体、同一套合并规则（`mount-source.ts`）。
 5. 压缩感知：识别 DSH 标准压缩 checkpoint（source `{kind:'plugin', plugin:'compact'}` 的 `sourceEventSeqs`），被 shadow 的挂载消息不再计入账本。
 6. 模型可调用 `file_mount_forget` 工具主动作废某个文件的账（强制重读）。去重 marker 会提示：上文找不到内容时，先 forget 再 read。
-7. **新鲜度（压力 × 深度）**：每个挂载段记录挂载时的上下文位置与 token 估算（最近一轮请求的**全部输入 token——未缓存 + 缓存命中 + 缓存写入**，DSH 的 usage 是 DISJOINT 计数）。短上下文不过期；窗口被填满后，越靠前的内容 `depth` 越大、分数越低。**得分低于阈值的段摘除账本**（下次 read 重发），过期次数达到 `pinAfter` 后钉住不再摘。**重读安全阀**与面板四挡（0.45 / 0.55 / 0.65 / 0.75）仍可用。
+7. **新鲜度（压力 × 深度）**：每个挂载段记录载体消息的 `seq`；sweep 用该 seq 之前可见消息的前缀和现算 `pos`（压缩后自动正确，旧消息只有 `born` 时把 `born` 当 `pos`）。`L` 优先用 usage 三字段之和，没有则用前缀和；`W` 来自 `session.requestContext()?.contextWindow`，没有则用配置默认。短上下文不过期；窗口被填满后越靠前的内容分数越低。**得分低于阈值的段摘除账本**，过期次数达到 `pinAfter` 后钉住。**重读安全阀**与面板四挡仍可用。
 路径身份：绝对路径 + `realpath`（软链接统一到真实文件）+ 大小写折叠（按文件系统实测，Windows/Mac 默认折叠）。
 
 ## 已知限制

@@ -331,8 +331,85 @@ describe('file-mount integration', () => {
     // The seeded ranges count as mounted: the read of L1-2 dedupes.
     expect(resultText(agent, 'c1')).toContain('already mounted, not re-added')
     expect(geo(ctx.fileMount.ledger(agent)[0]!.segments)).toEqual([{ start: 1, end: 2 }])
+  })
 
-    
+  it('recomputes pos from carrier seq after compact so a stale born cannot immortalize', async () => {
+    const subject = join(dir, 'seq-compact.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }, 50_000),
+      textWithUsage('first turn done', 50_000),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 400),
+      textWithUsage('second turn done', 400),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 600, safeTokens: 100 } })
+    const agent = ctx.agentLoop.create(SessionId('it-seq-compact'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    const mountEvent = agent.session.events.find((event) => event.type === 'user/message'
+      && (event.data.source as unknown as Record<string, unknown> | null)?.['plugin'] === 'file-mount')
+    expect(mountEvent).toBeDefined()
+    const highUsage = agent.session.events.filter((event) => {
+      if (event.type !== 'assistant/message') return false
+      const usage = event.data.usage
+      const input = usage && typeof usage === 'object' ? (usage as { inputTokens?: number }).inputTokens : undefined
+      return input === 50_000
+    })
+    expect(highUsage.length).toBeGreaterThan(0)
+    agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: '[compact checkpoint]' }],
+      source: { kind: 'plugin', plugin: 'compact' },
+    }), { surfaceOp: 'append', sourceEventSeqs: highUsage.map((event) => event.seq) })
+
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+
+    // Frozen born ≈ 50000 would be >= L=400 (immortal). Seq prefix puts pos
+    // near the start of the remaining log, so the segment expires and re-sends.
+    expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new', 'increment'])
+    expect(resultText(agent, 'c2')).toContain('--- L1-3 ---')
+  })
+
+  it('expires from seq prefix sums when assistant usage is absent', async () => {
+    const subject = join(dir, 'seq-nousage.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+    const noUsageTool = (id: string, args: object): StreamChunk[] => {
+      const callId = CallId(id)
+      const argumentsJson = JSON.stringify(args)
+      return [
+        { type: 'block-start', index: 0, blockType: 'tool-call' },
+        { type: 'tool-call-delta', index: 0, id: callId, name: 'read', argumentsDelta: argumentsJson },
+        { type: 'block-end', index: 0, block: { type: 'tool-call', id: callId, name: 'read', arguments: argumentsJson } },
+        { type: 'finish', reason: { kind: 'tool-calls' } },
+      ]
+    }
+    const noUsageText = (text: string): StreamChunk[] => [
+      { type: 'block-start', index: 0, blockType: 'text' },
+      ...Array.from(text, (char): StreamChunk => ({ type: 'text-delta', index: 0, text: char })),
+      { type: 'block-end', index: 0, block: { type: 'text', text } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ]
+    const padding = 'y'.repeat(8000)
+    const adapter = new MockAdapter([
+      noUsageTool('c1', { file_path: subject, offset: 1, limit: 3 }),
+      noUsageText('first turn done'),
+      noUsageText('padding'),
+      noUsageTool('c2', { file_path: subject, offset: 1, limit: 3 }),
+      noUsageText('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 600, safeTokens: 100 } })
+    const agent = ctx.agentLoop.create(SessionId('it-seq-nousage'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    send(agent, padding)
+    await waitForIdle(ctx, agent)
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+
+    expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new', 'increment'])
   })
 
   it('re-anchors when a compact checkpoint shadows the mounts (live sweep)', async () => {

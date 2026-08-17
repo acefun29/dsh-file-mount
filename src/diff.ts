@@ -101,6 +101,7 @@ export function remapSegments(segments: readonly LedgerSegment[], oldToNew: read
         start: mapped,
         end,
         ...seg.born !== undefined ? { born: seg.born } : {},
+        ...seg.seq !== undefined ? { seq: seg.seq } : {},
         ...tokens !== undefined && tokens > 0 ? { tokens } : {},
         expired: seg.expired,
       })

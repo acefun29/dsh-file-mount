@@ -34,7 +34,7 @@ import { diffLines, diffStats, remapSegments } from './diff.ts'
 import { matchesAnyGlob } from './glob.ts'
 import { FileContentCache } from './file-cache.ts'
 import { readFile, rename, writeFile } from 'node:fs/promises'
-import { inheritHistory, normalizeLedger, pruneExpired } from './mount-source.ts'
+import { inheritHistory, normalizeLedger, parseMountSource, pruneExpired } from './mount-source.ts'
 import { normalizeAbsPath } from './paths.ts'
 import { normalize, subtract, type LineRange } from './ranges.ts'
 import {
@@ -614,7 +614,7 @@ export class FileMountService extends Service {
       const pruned = pruneExpired(mounted, this.contextL.get(agent.id), this.freshnessThreshold, {
         safeTokens: this.safeTokens,
         pinAfter: this.pinAfter,
-        contextWindow: this.contextWindow,
+        contextWindow: this.windowW(agent),
         ...this.resendBudget !== undefined ? { resendBudget: this.resendBudget } : {},
       })
       mounted = pruned.active
@@ -656,6 +656,7 @@ export class FileMountService extends Service {
                   start: seg.start,
                   end: overlapStart - 1,
                   ...seg.born !== undefined ? { born: seg.born } : {},
+                  ...seg.seq !== undefined ? { seq: seg.seq } : {},
                   ...tokens !== undefined ? { tokens } : {},
                   expired: seg.expired,
                 })
@@ -666,6 +667,7 @@ export class FileMountService extends Service {
                   start: overlapEnd + 1,
                   end: seg.end,
                   ...seg.born !== undefined ? { born: seg.born } : {},
+                  ...seg.seq !== undefined ? { seq: seg.seq } : {},
                   ...tokens !== undefined ? { tokens } : {},
                   expired: seg.expired,
                 })
@@ -985,6 +987,121 @@ export class FileMountService extends Service {
     }
     this.cursors.set(agent.id, events.length)
     if (dirty) this.refold(agent, store)
+    this.reposition(agent, store)
+  }
+
+  /** Session-advertised context window, or the configured default. */
+  private windowW(agent: Agent): number {
+    return agent.session.requestContext()?.contextWindow ?? this.contextWindow
+  }
+
+  /** Tokens reported on one assistant/message (DISJOINT usage sum). */
+  private usageTokens(event: { type: string; data?: unknown }): number | undefined {
+    if (event.type !== 'assistant/message') return undefined
+    const data = event.data
+    if (typeof data !== 'object' || data === null) return undefined
+    const usage = (data as Record<string, unknown>)['usage']
+    if (typeof usage !== 'object' || usage === null) return undefined
+    const tokens = usage as Record<string, unknown>
+    const parts = [tokens['inputTokens'], tokens['cacheReadTokens'], tokens['cacheWriteTokens']]
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0)
+    if (parts.length === 0) return undefined
+    return parts.reduce((total, part) => total + part, 0)
+  }
+
+  /** Rough token count of one visible event's own payload (not the full prompt). */
+  private estimateEventTokens(event: { type: string; data?: unknown }): number {
+    const usage = this.usageTokens(event)
+    if (event.type === 'assistant/message' && usage !== undefined) {
+      const output = typeof (event.data as { usage?: { outputTokens?: number } } | undefined)?.usage?.outputTokens === 'number'
+        ? (event.data as { usage: { outputTokens: number } }).usage.outputTokens
+        : 0
+      return Math.max(1, output)
+    }
+    const text = this.eventText(event)
+    return text.length > 0 ? estimateTokens(text) : 0
+  }
+
+  private eventText(event: { type: string; data?: unknown }): string {
+    const data = event.data
+    if (typeof data !== 'object' || data === null) return ''
+    const record = data as Record<string, unknown>
+    const blocks = record['content'] ?? (typeof record['message'] === 'object' && record['message'] !== null
+      ? (record['message'] as Record<string, unknown>)['content']
+      : undefined)
+    if (!Array.isArray(blocks)) return ''
+    const parts: string[] = []
+    for (const block of blocks) {
+      if (typeof block !== 'object' || block === null) continue
+      const item = block as Record<string, unknown>
+      if (item['type'] === 'text' && typeof item['text'] === 'string') parts.push(item['text'])
+      else if (typeof item['content'] === 'string') parts.push(item['content'])
+      else if (Array.isArray(item['content'])) {
+        for (const inner of item['content']) {
+          if (typeof inner === 'object' && inner !== null && (inner as Record<string, unknown>)['type'] === 'text'
+            && typeof (inner as Record<string, unknown>)['text'] === 'string') {
+            parts.push((inner as Record<string, unknown>)['text'] as string)
+          }
+        }
+      }
+    }
+    return parts.join('\n')
+  }
+
+  /**
+   * Bind carrier seq onto added ranges and refresh `born` from the prefix
+   * sum of visible events before that seq. Legacy segments with only `born`
+   * keep it as pos.
+   */
+  private reposition(agent: Agent, store: MountStore): void {
+    const events = agent.session.events
+    const shadowed = shadowedSeqsOf(events)
+    const posBySeq = new Map<number, number>()
+    let prefix = 0
+    let usageL: number | undefined
+    for (const event of events) {
+      if (shadowed.has(event.seq)) continue
+      posBySeq.set(event.seq, usageL ?? prefix)
+      const fromUsage = this.usageTokens(event)
+      if (fromUsage !== undefined) usageL = fromUsage
+      prefix += this.estimateEventTokens(event)
+    }
+    if (usageL !== undefined) this.contextL.set(agent.id, usageL)
+    else if (prefix > 0) this.contextL.set(agent.id, prefix)
+
+    for (const event of events) {
+      if (shadowed.has(event.seq) || event.type !== 'user/message') continue
+      const parsed = parseMountSource(event.data.source)
+      if (parsed === undefined || parsed.mountKind === 'dedup') continue
+      const source = event.data.source as Record<string, unknown>
+      const addedRaw = source['added']
+      const added = Array.isArray(addedRaw)
+        ? addedRaw.filter((item): item is { start: number; end: number } => {
+          if (typeof item !== 'object' || item === null) return false
+          const rec = item as Record<string, unknown>
+          return typeof rec['start'] === 'number' && typeof rec['end'] === 'number'
+        })
+        : parsed.delta.segments
+      if (added.length === 0) continue
+      const file = store.get(parsed.path)
+      if (file === undefined) continue
+      const next = file.segments.map((seg) => {
+        const hit = added.some((range) => range.start <= seg.end && range.end >= seg.start)
+        if (!hit) return seg
+        return { ...seg, seq: event.seq }
+      })
+      store.replaceSegments(parsed.path, next, file.expiredHistory, 0, 0)
+    }
+
+    for (const file of store.all()) {
+      const next = file.segments.map((seg) => {
+        if (seg.seq === undefined) return seg
+        const pos = posBySeq.get(seg.seq)
+        if (pos === undefined) return seg
+        return { ...seg, born: pos }
+      })
+      store.replaceSegments(file.absPath, next, file.expiredHistory, 0, 0)
+    }
   }
 
   /**
@@ -1034,9 +1151,7 @@ export class FileMountService extends Service {
       }
       this.stores.set(agent.id, store)
       this.cursors.set(agent.id, agent.session.events.length)
-      // A resumed session must rebuild its context length from the full log
-      // (the sweep cursor is already at the end, so this is the one full pass).
-      for (const event of agent.session.events) this.trackContextLength(agent.id, event)
+      this.reposition(agent, store)
       this.resyncPins(agent.id, store)
     })().finally(() => { this.restores.delete(agent.id) })
     this.restores.set(agent.id, pending)

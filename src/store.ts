@@ -44,6 +44,7 @@ export class MountStore {
       start: seg.start,
       end: seg.end,
       ...seg.born !== undefined ? { born: seg.born } : {},
+      ...seg.seq !== undefined ? { seq: seg.seq } : {},
       ...seg.tokens !== undefined ? { tokens: seg.tokens } : {},
       expired: seg.expired ?? 0,
     }))
@@ -78,6 +79,7 @@ export class MountStore {
       start: seg.start,
       end: seg.end,
       ...seg.born !== undefined ? { born: seg.born } : {},
+      ...seg.seq !== undefined ? { seq: seg.seq } : {},
       ...seg.tokens !== undefined ? { tokens: seg.tokens } : {},
       expired: seg.expired ?? 0,
     })))

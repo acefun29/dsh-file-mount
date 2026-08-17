@@ -22,8 +22,11 @@ export interface Segment {
  */
 export interface SegmentMeta {
   /** Context position (input tokens) at mount time; undefined when unknown
-   * (pre-freshness messages or no usage data on the session). */
+   * (pre-freshness messages or no usage data on the session). After a carrier
+   * message lands, sweep refreshes this from the seq prefix sum. */
   born?: number
+  /** Event seq of the carrier user/message that added this range. */
+  seq?: number
   /** Estimated token count of this segment (midpoint size in the freshness score); undefined for legacy/unknown. */
   tokens?: number
   /** Times this content expired and was re-read; never resets. */
