@@ -11,7 +11,7 @@ import {
   pruneExpired,
 } from '../src/mount-source.ts'
 
-const tightWindow = { contextWindow: 800, safeTokens: 100, pinAfter: 2 }
+const tightWindow = { contextWindow: 800, safeTokens: 100 }
 
 describe('normalizeLedger', () => {
   it('merges adjacent segments ONLY when born is identical, summing tokens and taking max expired', () => {
@@ -64,14 +64,14 @@ describe('normalizeLedger', () => {
 describe('calculateFreshnessScore', () => {
   it('keeps short contexts at score 1 (L <= Lsafe)', () => {
     expect(calculateFreshnessScore(50, 1_000)).toBe(1)
-    expect(calculateFreshnessScore(500, 8_000)).toBe(1)
+    expect(calculateFreshnessScore(500, 80_000)).toBe(1)
   })
 
   it('does not rise as L grows (monotonic non-increasing)', () => {
     const born = 100
-    const opts = { contextWindow: 128_000, safeTokens: 16_000 }
+    const opts = { contextWindow: 128_000 }
     let previous = calculateFreshnessScore(born, 16_000, 0, opts)
-    for (const L of [20_000, 40_000, 80_000, 128_000]) {
+    for (const L of [20_000, 40_000, 80_000, 108_800, 128_000]) {
       const score = calculateFreshnessScore(born, L, 0, opts)
       expect(score).toBeLessThanOrEqual(previous + 1e-12)
       previous = score
@@ -79,14 +79,14 @@ describe('calculateFreshnessScore', () => {
   })
 
   it('scores deeper (older) content lower than recent content at the same L', () => {
-    const opts = { contextWindow: 128_000, safeTokens: 16_000 }
-    const oldScore = calculateFreshnessScore(5_000, 40_000, 0, opts)
-    const newScore = calculateFreshnessScore(35_000, 40_000, 0, opts)
+    const opts = { contextWindow: 128_000 }
+    const oldScore = calculateFreshnessScore(5_000, 125_000, 0, opts)
+    const newScore = calculateFreshnessScore(120_000, 125_000, 0, opts)
     expect(oldScore).toBeLessThan(newScore)
   })
 
-  it('pins at expired >= pinAfter', () => {
-    const opts = { contextWindow: 800, safeTokens: 100, pinAfter: 2, expired: 2 }
+  it('pins at expired >= pinAfter (default 1)', () => {
+    const opts = { contextWindow: 800, safeTokens: 100, expired: 1 }
     expect(calculateFreshnessScore(50, 700, 0, opts)).toBe(1)
   })
 })
@@ -142,9 +142,21 @@ describe('pruneExpired', () => {
     expect(r.history).toEqual([])
   })
 
+  it('does not prune mid-session mounts under the default 0.85 W safe band', () => {
+    const r = pruneExpired([{ start: 1, end: 5, born: 10_000, expired: 0 }], 50_000)
+    expect(r.active).toHaveLength(1)
+    expect(r.history).toEqual([])
+  })
+
+  it('prunes deep content once L is near the window', () => {
+    const r = pruneExpired([{ start: 1, end: 5, born: 1_000, expired: 0 }], 126_000)
+    expect(r.active).toEqual([])
+    expect(r.history).toEqual([{ start: 1, end: 5, expired: 1 }])
+  })
+
   it('does not prune a pinned segment (expired >= pinAfter)', () => {
     const r = pruneExpired(
-      [{ start: 1, end: 5, born: 50, expired: 2 }],
+      [{ start: 1, end: 5, born: 50, expired: 1 }],
       700,
       0.6,
       tightWindow,

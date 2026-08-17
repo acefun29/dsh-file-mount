@@ -41,8 +41,8 @@ npx @deepseek-ai/dsh --profile web
     statsFile: ./dsh-file-mount-stats.json  # 可选：跨会话总账落盘路径
     freshnessEnabled: true        # 新鲜度：默认开
     freshnessThreshold: 0.6       # 得分低于此值视为过期（默认 0.6）；面板四挡宽松 0.45 / 标准 0.55 / 敏感 0.65 / 激进 0.75（越高越早重发）
-    safeTokens: 16000             # 短于此时 pressure=0，不会过期（同时不超过 0.25×窗口）
-    pinAfter: 2                   # 过期达到此次数后钉住，不再摘除
+    safeRatio: 0.85               # L 低于 0.85×窗口时 pressure=0，挂载几乎撑过整场会话
+    pinAfter: 1                   # 过期一次后钉住，该段最多只被重发一次
     contextWindow: 128000         # 会话未报告窗口时的默认 W
     # resendBudget: 8000          # 可选：大于此 token 的段本轮不摘除
     valveReads: 2                 # 重读安全阀：连续拦截达到此次数触发原生透传重读（0=关闭）
@@ -57,7 +57,7 @@ npx @deepseek-ai/dsh --profile web
 4. 挂载状态结构化写入注入消息的 source（标准 `user/message` 事件），恢复重放与浏览器折叠共用同一载体、同一套合并规则（`mount-source.ts`）。
 5. 压缩感知：识别 DSH 标准压缩 checkpoint（source `{kind:'plugin', plugin:'compact'}` 的 `sourceEventSeqs`），被 shadow 的挂载消息不再计入账本。
 6. 模型可调用 `file_mount_forget` 工具主动作废某个文件的账（强制重读）。去重 marker 会提示：上文找不到内容时，先 forget 再 read。
-7. **新鲜度（压力 × 深度）**：每个挂载段记录载体消息的 `seq`；sweep 用该 seq 之前可见消息的前缀和现算 `pos`（压缩后自动正确，旧消息只有 `born` 时把 `born` 当 `pos`）。`L` 优先用 usage 三字段之和，没有则用前缀和；`W` 来自 `session.requestContext()?.contextWindow`，没有则用配置默认。短上下文不过期；窗口被填满后越靠前的内容分数越低。**得分低于阈值的段摘除账本**，过期次数达到 `pinAfter` 后钉住。**重读安全阀**与面板四挡仍可用。
+7. **新鲜度（压力 × 深度）**：每个挂载段记录载体消息的 `seq`；sweep 用该 seq 之前可见消息的前缀和现算 `pos`（压缩后自动正确，旧消息只有 `born` 时把 `born` 当 `pos`）。`L` 优先用 usage 三字段之和，没有则用前缀和；`W` 来自 `session.requestContext()?.contextWindow`，没有则用配置默认。**上下文未到 0.85×窗口时不过期**；接近窗口上限后越靠前的内容分数越低。**得分低于阈值的段摘除账本**，过期一次（`pinAfter` 默认 1）后钉住。**重读安全阀**与面板四挡仍可用。
 路径身份：绝对路径 + `realpath`（软链接统一到真实文件）+ 大小写折叠（按文件系统实测，Windows/Mac 默认折叠）。
 
 ## 已知限制

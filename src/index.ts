@@ -86,9 +86,11 @@ export interface Config {
   freshnessEnabled?: boolean
   /** Score below which a segment counts as expired (0..1, default 0.6). */
   freshnessThreshold?: number
-  /** Prompt length below which pressure is 0 (default 16000; also capped at 0.25 W). */
+  /** Fraction of the context window below which pressure is 0 (default 0.85). */
+  safeRatio?: number
+  /** Absolute Lsafe override; when set, takes precedence over safeRatio. */
   safeTokens?: number
-  /** Expired count at which a segment is pinned and no longer pruned (default 2). */
+  /** Expired count at which a segment is pinned and no longer pruned (default 1). */
   pinAfter?: number
   /** Context window W in tokens when the session has not reported one (default 128000). */
   contextWindow?: number
@@ -110,8 +112,9 @@ export const Config: z<Config> = z.object({
   statsFile: z.string(),
   freshnessEnabled: z.boolean().default(true),
   freshnessThreshold: z.number().step(0.01).min(0).max(1).default(0.6),
-  safeTokens: z.number().step(1).min(0).default(16_000),
-  pinAfter: z.number().step(1).min(0).default(2),
+  safeRatio: z.number().min(0).max(1).default(0.85),
+  safeTokens: z.number().step(1).min(0),
+  pinAfter: z.number().step(1).min(0).default(1),
   contextWindow: z.number().step(1).min(1).default(128_000),
   resendBudget: z.number().step(1).min(0),
   valveReads: z.number().step(1).min(0).default(2),
@@ -200,7 +203,8 @@ export class FileMountService extends Service {
    * host provides one (runtime-adjustable from the dashboard tier picker),
    * the config value otherwise. */
   private freshnessThreshold: number
-  private readonly safeTokens: number
+  private readonly safeRatio: number
+  private readonly safeTokens: number | undefined
   private readonly pinAfter: number
   private readonly contextWindow: number
   private readonly resendBudget: number | undefined
@@ -219,8 +223,9 @@ export class FileMountService extends Service {
     this.freshnessEnabled = resolved.freshnessEnabled ?? true
     this.configuredFreshnessThreshold = resolved.freshnessThreshold ?? 0.6
     this.freshnessThreshold = this.configuredFreshnessThreshold
-    this.safeTokens = resolved.safeTokens ?? 16_000
-    this.pinAfter = resolved.pinAfter ?? 2
+    this.safeRatio = resolved.safeRatio ?? 0.85
+    this.safeTokens = resolved.safeTokens
+    this.pinAfter = resolved.pinAfter ?? 1
     this.contextWindow = resolved.contextWindow ?? 128_000
     this.resendBudget = resolved.resendBudget
     this.valveReads = resolved.valveReads ?? 2
@@ -612,9 +617,10 @@ export class FileMountService extends Service {
     let mounted = existing.segments
     if (this.freshnessEnabled) {
       const pruned = pruneExpired(mounted, this.contextL.get(agent.id), this.freshnessThreshold, {
-        safeTokens: this.safeTokens,
+        safeRatio: this.safeRatio,
         pinAfter: this.pinAfter,
         contextWindow: this.windowW(agent),
+        ...this.safeTokens !== undefined ? { safeTokens: this.safeTokens } : {},
         ...this.resendBudget !== undefined ? { resendBudget: this.resendBudget } : {},
       })
       mounted = pruned.active

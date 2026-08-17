@@ -142,7 +142,7 @@ describe('freshnessLevel', () => {
   })
 
   it('pins expired >= pinAfter as fresh', () => {
-    expect(freshnessLevel(50, 700, 0.6, 0, { ...tight, pinAfter: 2, expired: 2 })).toBe('fresh')
+    expect(freshnessLevel(50, 700, 0.6, 0, { ...tight, expired: 1 })).toBe('fresh')
   })
 })
 

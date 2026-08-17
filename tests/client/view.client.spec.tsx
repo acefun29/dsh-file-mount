@@ -125,7 +125,7 @@ describe('MountedFilesView', () => {
         turn: 1,
         step: 1,
         blocks: [],
-        usage: { inputTokens: 40000, outputTokens: 1 },
+        usage: { inputTokens: 120000, outputTokens: 1 },
         messageId: 'm1' as never,
       } as unknown as ConversationNode,
       {
@@ -141,9 +141,9 @@ describe('MountedFilesView', () => {
           path: 'src/a.ts',
           hash: 'abcdef0123456789',
           totalLines: 100,
-          // born 5000 at L 40000 → score ≈ 0.595: warn at standard 0.55,
+          // born 60000 at L 120000 → score ≈ 0.62: warn at standard 0.55,
           // expired at the aggressive 0.75 tier.
-          mounted: [{ start: 1, end: 50, born: 5000, expired: 0 }],
+          mounted: [{ start: 1, end: 50, born: 60000, expired: 0 }],
           added: [{ start: 1, end: 50 }],
           mountKind: 'new',
           savedTokens: 0,

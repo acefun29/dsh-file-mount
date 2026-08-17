@@ -6,9 +6,9 @@
  *
  * Freshness (pressure × depth): each segment carries `born` (context
  * position in input tokens at mount time) and `expired` (how many times the
- * content expired and was re-read). Short prompts stay fresh; deep content
- * decays as the window fills. Segments whose expired count reaches pinAfter
- * stay on the ledger.
+ * content expired and was re-read). Pressure stays 0 until L exceeds
+ * 0.85 W, so mounts last most of the session. After pinAfter expiries
+ * (default 1) the segment stays on the ledger.
  */
 import type { ExpiredSegment, LedgerSegment, MountKind } from './types.ts'
 
@@ -175,7 +175,9 @@ export interface PruneResult {
 }
 
 export interface FreshnessOptions {
-  /** Tokens below which pressure is 0 (default 16k; also capped at 0.25 W). */
+  /** Fraction of W below which pressure is 0 (default 0.85). Ignored when `safeTokens` is set. */
+  safeRatio?: number
+  /** Absolute Lsafe override for tests / rare config; takes precedence over `safeRatio`. */
   safeTokens?: number
   /** Expired count at which a segment is pinned (score 1, never pruned). */
   pinAfter?: number
@@ -189,8 +191,8 @@ export interface FreshnessOptions {
 
 export const DEFAULT_FRESHNESS_CONFIG = {
   threshold: 0.6,
-  safeTokens: 16_000,
-  pinAfter: 2,
+  safeRatio: 0.85,
+  pinAfter: 1,
   contextWindow: 128_000,
   valveReads: 2,
 } as const
@@ -200,8 +202,8 @@ function clamp01(x: number): number {
 }
 
 /**
- * Pressure × depth freshness: short contexts stay fresh; deep (old) content
- * decays as the prompt fills the window. Pinned segments (expired >= pinAfter)
+ * Pressure × depth freshness: mounts stay fresh until the prompt is near
+ * the window (Lsafe = 0.85 W by default). Pinned segments (expired >= pinAfter)
  * always score 1.
  *
  * pressure = sqrt(clamp01((L - Lsafe) / (W - Lsafe)))
@@ -218,8 +220,9 @@ export function calculateFreshnessScore(
   const pinAfter = options?.pinAfter ?? DEFAULT_FRESHNESS_CONFIG.pinAfter
   if ((options?.expired ?? 0) >= pinAfter) return 1
   const W = options?.contextWindow ?? DEFAULT_FRESHNESS_CONFIG.contextWindow
-  const safeTokens = options?.safeTokens ?? DEFAULT_FRESHNESS_CONFIG.safeTokens
-  const Lsafe = Math.min(safeTokens, 0.25 * W)
+  const Lsafe = options?.safeTokens !== undefined
+    ? Math.min(Math.max(0, options.safeTokens), W)
+    : (options?.safeRatio ?? DEFAULT_FRESHNESS_CONFIG.safeRatio) * W
   const denom = W - Lsafe
   const pressure = denom <= 0
     ? (contextL > Lsafe ? 1 : 0)

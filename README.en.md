@@ -41,8 +41,8 @@ One package, two halves: `dsh.bundle.patch` mounts the host plugin row; the `dsh
     statsFile: ./dsh-file-mount-stats.json  # optional cross-session totals file
     freshnessEnabled: true        # freshness: on by default
     freshnessThreshold: 0.6       # score below this expires (default 0.6); panel tiers 0.45 / 0.55 / 0.65 / 0.75 (higher = re-send sooner)
-    safeTokens: 16000             # pressure is 0 below this (also capped at 0.25×window)
-    pinAfter: 2                   # pin a segment after this many expiries
+    safeRatio: 0.85               # pressure is 0 below 0.85×window, so mounts last most of the session
+    pinAfter: 1                   # pin after one expiry — a segment is re-sent at most once
     contextWindow: 128000         # default W when the session has not reported a window
     # resendBudget: 8000          # optional: skip expiring a segment larger than this
     valveReads: 2                 # re-read safety valve: consecutive full intercepts before native pass-through (0 = disabled)
@@ -57,7 +57,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
 5. Compaction awareness: canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are skipped.
 6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read). The dedup marker tells it to forget then re-read when the mounted content is not in the conversation.
-7. **Freshness (pressure × depth)**: each mounted segment records its carrier message `seq`; sweep recomputes `pos` as the prefix sum of visible events before that seq (correct after compaction; legacy `born` is used as `pos` when `seq` is missing). `L` is the DISJOINT usage sum when present, otherwise the prefix sum; `W` comes from `session.requestContext()?.contextWindow`, else the configured default. Short prompts never expire; as the window fills, deeper content scores lower. **Segments scoring below the threshold leave the ledger**; after `pinAfter` expiries the segment stays mounted. **Re-read safety valve** and live panel tiers still apply.
+7. **Freshness (pressure × depth)**: each mounted segment records its carrier message `seq`; sweep recomputes `pos` as the prefix sum of visible events before that seq (correct after compaction; legacy `born` is used as `pos` when `seq` is missing). `L` is the DISJOINT usage sum when present, otherwise the prefix sum; `W` comes from `session.requestContext()?.contextWindow`, else the configured default. **Nothing expires before 0.85×window**; near the cap, deeper content scores lower. **Segments scoring below the threshold leave the ledger**; after one expiry (`pinAfter` default 1) the segment stays mounted. **Re-read safety valve** and live panel tiers still apply.
 Path identity: absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold).
 
 ## Known limitations
