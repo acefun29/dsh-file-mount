@@ -34,7 +34,7 @@ One package, two halves: `dsh.bundle.patch` mounts the host plugin row; the `dsh
     capacity: 32             # file identity cache capacity (mounted files are pinned)
     ttlMs: 300000            # safety valve: force re-read after this interval
     maxPinnedFiles: 256      # max mounted files pinned per session
-    minSavedTokens: 16       # dedup below this saving passes through natively (and does not count toward the safety valve)
+    minSavedTokens: 16       # dedup/increment below this net saving passes through natively without writing the ledger (and does not count toward the safety valve)
     maxFingerprintBytes: 1000000   # files above this keep no line draft (whole remount)
     maxManagedBytes: 16777216      # files above this are not managed at all
     excludeGlobs: ['**/node_modules/**']  # these paths always pass through

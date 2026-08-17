@@ -89,7 +89,7 @@ describe('file-mount integration', () => {
       toolCallResponse('c3', 'read', { file_path: file, offset: 3, limit: 4 }),
       textResponse('done'),
     ])
-    const ctx = await harness(adapter, { cwd: dir })
+    const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 0 } })
     const agent = ctx.agentLoop.create(SessionId('it-anchor'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
@@ -160,7 +160,7 @@ describe('file-mount integration', () => {
       toolCallResponse('c3', 'read', { file_path: file, offset: 5, limit: 2 }),
       textResponse('third turn done'),
     ])
-    const ctx = await harness(adapter, { cwd: dir })
+    const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 0 } })
     const agent = ctx.agentLoop.create(SessionId('it-cancel-increment'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
@@ -200,6 +200,24 @@ describe('file-mount integration', () => {
     // (below minSavedTokens 12) and must pass through natively.
     expect(resultText(agent, 'c2')).toContain('<content>')
     expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new'])
+  })
+
+  it('passes a one-line increment through without writing the ledger', async () => {
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 4 }),
+      toolCallResponse('c2', 'read', { file_path: file, offset: 4, limit: 2 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 16 } })
+    const agent = ctx.agentLoop.create(SessionId('it-increment-floor'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    // Overlap is a single 10-token line; note overhead makes net < 16, so the
+    // increment must pass through natively and leave the ledger at L1-4.
+    expect(resultText(agent, 'c2')).toContain('<content>')
+    expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new'])
+    expect(geo(ctx.fileMount.ledger(agent)[0]!.segments)).toEqual([{ start: 1, end: 4 }])
   })
 
   it('remounts as a fresh anchor when the file changes on disk', async () => {

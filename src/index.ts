@@ -709,6 +709,18 @@ export class FileMountService extends Service {
       )
     }
     this.clearValveCount(agent.id, absPath)
+    const covered = subtract(missing, want)
+    const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
+    const note = `[file-mount: ${value.path}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`
+    const spentTokens = estimateTokens(note)
+    const coveredSaved = estimateRangeTokens(lines, windowStart, covered)
+    const pendingPeek = this.pendingDedup.get(agent.id)?.get(absPath) ?? 0
+    // A window that is entirely new (expiry re-send, pure tail) must still
+    // land in the ledger. The floor only refuses overlap-saves that do not
+    // pay for the note.
+    if (this.minSavedTokens > 0 && covered.length > 0 && coveredSaved + pendingPeek - spentTokens < this.minSavedTokens) return downstream
+    const pendingSaved = this.takePendingSaved(agent.id, absPath)
+    const savedTokens = coveredSaved + pendingSaved
     const block = renderMountBlock({
       path: value.path,
       hash: entry.hash,
@@ -717,13 +729,7 @@ export class FileMountService extends Service {
       lines,
       missing,
     })
-    const covered = subtract(missing, want)
-    const pendingSaved = this.takePendingSaved(agent.id, absPath)
-    const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
     const blockHead = markerHead(value.path, entry.hash, normalize([...mounted, ...missing]))
-    const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
-    const note = `[file-mount: ${value.path}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`
-    const spentTokens = estimateTokens(note)
     const fresh = this.stampBornRanges(agent.id, blockHead, missing, lines, windowStart)
     const inherited = inheritHistory(fresh, history)
     const postMounted = normalizeLedger([...mounted, ...inherited.segments])
