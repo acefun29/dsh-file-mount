@@ -1,6 +1,6 @@
 import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { displayPath, normalizeAbsPath } from '../src/paths.ts'
 
@@ -36,7 +36,10 @@ describe('normalizeAbsPath', () => {
 
   it('falls back to resolve for paths that do not exist', () => {
     const missing = join(dir, 'nope', '..', 'Missing.TS')
-    expect(normalizeAbsPath(missing)).toContain('missing.ts'.toLowerCase() === 'missing.ts' ? 'missing' : 'MISSING')
+    const normalized = normalizeAbsPath(missing)
+    const resolved = resolve(missing)
+    expect(basename(normalized).toLowerCase()).toBe('missing.ts')
+    expect(normalized === resolved || normalized === resolved.toLowerCase()).toBe(true)
   })
 })
 
