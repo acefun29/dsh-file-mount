@@ -405,13 +405,14 @@ export class FileMountService extends Service {
     }
   }
 
-  /** An edit changes only a region, so the whole file is NOT known: just
-   * invalidate the cache identity; the next read diff-remounts (plan item 9). */
+  /** An edit changes only a region, so the whole file is NOT known: mark
+   * the cache stale but keep the line-fingerprint draft so the next read
+   * re-reads disk and remounts only the changed lines (plan item 9). */
   private onEditResult(agent: Agent | undefined, value: unknown): void {
     const path = asPathValue(value)
     if (path === undefined) return
     const absPath = normalizeAbsPath(path)
-    this.cache.invalidate(absPath)
+    this.cache.markStale(absPath)
     if (agent !== undefined) {
       this.clearValveCount(agent.id, absPath)
       this.pendingDedup.get(agent.id)?.delete(absPath)

@@ -74,7 +74,7 @@ const DEFAULT_MAX_FINGERPRINT_BYTES = 1_000_000
 const DEFAULT_MAX_MANAGED_BYTES = 16 * 1024 * 1024
 
 export class FileContentCache {
-  private byPath = new Map<string, { entry: FileCacheEntry; lastVerified: number }>()
+  private byPath = new Map<string, { entry: FileCacheEntry; lastVerified: number; stale: boolean }>()
   /** Mounted-file pins: path -> the session keys currently pinning it. */
   private pinned = new Map<string, Set<string>>()
   /** In-flight reads by path: concurrent lookups share one read. */
@@ -121,10 +121,21 @@ export class FileContentCache {
     }
   }
 
-  /** Forget one path's cached identity (write/edit/forget callers). */
+  /** Forget one path's cached identity (write/forget callers). */
   invalidate(absPath: string): void {
     this.byPath.delete(absPath)
     this.inFlight.delete(absPath)
+  }
+
+  /**
+   * Mark the cached identity stale without dropping the draft. The next
+   * lookup always re-reads the disk, but `previous` still carries the
+   * retained line fingerprints so an edit can remount only the changed lines.
+   */
+  markStale(absPath: string): void {
+    const cached = this.byPath.get(absPath)
+    if (cached === undefined) return
+    this.byPath.set(absPath, { ...cached, stale: true })
   }
 
   /**
@@ -151,13 +162,14 @@ export class FileContentCache {
     const cached = this.byPath.get(absPath)
     if (
       cached &&
+      !cached.stale &&
       cached.entry.mtimeNs === st.mtimeNs &&
       cached.entry.size === st.size &&
       now - cached.lastVerified < this.ttlMs
     ) {
       return { current: cached.entry, changed: false }
     }
-    // Miss or expiry: (re)read, sharing one in-flight read per path.
+    // Miss, expiry, or stale: (re)read, sharing one in-flight read per path.
     let pending = this.inFlight.get(absPath)
     if (pending === undefined) {
       pending = (async () => {
@@ -169,7 +181,7 @@ export class FileContentCache {
           return null
         }
         const entry = this.buildEntry(st, buf)
-        this.byPath.set(absPath, { entry, lastVerified: Date.now() })
+        this.byPath.set(absPath, { entry, lastVerified: Date.now(), stale: false })
         this.evict()
         const previous = cached?.entry
         const changed = previous !== undefined && previous.hash !== entry.hash

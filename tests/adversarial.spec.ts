@@ -109,16 +109,16 @@ describe('file-mount adversarial', () => {
     expect(resultText(agent, 'c1')).toContain('No mount ledger entry to forget')
   })
 
-  it('an edit invalidates the cache so the next read remounts the window', async () => {
+  it('an edit keeps the line draft so the next read remounts only the changed line', async () => {
     const file = await freshFile('edit.txt')
     // A stub edit tool with the canonical { path, before, after } shape: the
     // real edit tool fails with SetFileSecurityW EACCES on this Windows host
     // (fs-local's Win32 ACL preservation), unrelated to the plugin's dispatch.
     // The stub registers on the AGENT scope so it shadows the global 'edit'.
     const adapter = new MockAdapter([
-      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 3 }),
-      toolCallResponse('c2', 'edit', { file_path: file, old_string: LINE(1), new_string: 'CHANGED' }),
-      toolCallResponse('c3', 'read', { file_path: file, offset: 1, limit: 3 }),
+      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 6 }),
+      toolCallResponse('c2', 'edit', { file_path: file, old_string: LINE(3), new_string: 'CHANGED' }),
+      toolCallResponse('c3', 'read', { file_path: file, offset: 1, limit: 6 }),
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
@@ -156,9 +156,8 @@ describe('file-mount adversarial', () => {
 
     const sources = mountMessages(agent)
     expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
-    // No draft survived the edit -> whole window re-sent.
-    expect(sources[1]!['added']).toEqual([{ start: 1, end: 3 }])
-    expect(resultText(agent, 'c3')).toContain('file changed')
+    expect(sources[1]!['added']).toEqual([{ start: 3, end: 3 }])
+    expect(resultText(agent, 'c3')).toContain('file changed: +1/-1 lines (~5 unchanged)')
   })
 
   it('a write mounts the file as known, so the next read dedupes (item 13)', async () => {

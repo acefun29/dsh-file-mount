@@ -201,12 +201,38 @@ describe('FileContentCache', () => {
     expect(await cache.get(a)).toBeNull()
   })
 
-  it('invalidate forgets the cached entry (write/edit paths)', async () => {
+  it('invalidate forgets the cached entry (write/forget paths)', async () => {
     const cache = new FileContentCache()
     const first = await cache.get(a)
     cache.invalidate(a)
     const second = await cache.get(a)
     expect(second).not.toBe(first)
+  })
+
+  it('markStale keeps the draft so the next lookup returns previous', async () => {
+    const cache = new FileContentCache()
+    const first = await cache.get(a)
+    cache.markStale(a)
+    await writeFile(a, 'alpha\nBETA\n', 'utf8')
+    const lookup = await cache.lookup(a)
+    expect(lookup!.changed).toBe(true)
+    expect(lookup!.previous).toBe(first)
+    expect(lookup!.current.hash).not.toBe(first!.hash)
+  })
+
+  it('markStale forces a re-read even when stat still matches', async () => {
+    let reads = 0
+    const cache = new FileContentCache({
+      readFile: async (path) => {
+        reads++
+        return readFile(path)
+      },
+    })
+    await cache.get(a)
+    expect(reads).toBe(1)
+    cache.markStale(a)
+    await cache.get(a)
+    expect(reads).toBe(2)
   })
 })
 
