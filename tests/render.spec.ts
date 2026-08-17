@@ -78,7 +78,7 @@ describe('renderMountBlock', () => {
       missing: [{ start: 52, end: 55 }],
     })
     expect(text).toBe(
-      '[file-mount: src/a.ts hash:abc12345 mounted:L1-55]\n--- L52-55 ---\n52\n53\n54\n55',
+      '[file-mount: src/a.ts hash:abc12345 mounted:L1-55]\n--- L52-55 ---\n52: 52\n53: 53\n54: 54\n55: 55',
     )
   })
 
@@ -92,7 +92,7 @@ describe('renderMountBlock', () => {
       missing: [{ start: 2, end: 3 }, { start: 6, end: 7 }],
     })
     expect(text).toBe(
-      '[file-mount: src/a.ts hash:h mounted:L1-9]\n--- L2-3 ---\n2\n3\n--- L6-7 ---\n6\n7',
+      '[file-mount: src/a.ts hash:h mounted:L1-9]\n--- L2-3 ---\n2: 2\n3: 3\n--- L6-7 ---\n6: 6\n7: 7',
     )
   })
 
@@ -105,6 +105,6 @@ describe('renderMountBlock', () => {
       lines: ['1', '2', '3'],
       missing: [{ start: 1, end: 2 }, { start: 3, end: 3 }],
     })
-    expect(text).toBe('[file-mount: src/a.ts hash:h mounted:L1-10]\n--- L1-3 ---\n1\n2\n3')
+    expect(text).toBe('[file-mount: src/a.ts hash:h mounted:L1-10]\n--- L1-3 ---\n1: 1\n2: 2\n3: 3')
   })
 })

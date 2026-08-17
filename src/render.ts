@@ -8,7 +8,7 @@
  * Formats:
  *   head    [file-mount: <path> hash:<h8> mounted:L20-80]
  *   dedup   head + note (zero content re-added)
- *   block   head + per-segment "--- Ls-e ---" headers + raw lines
+ *   block   head + per-segment "--- Ls-e ---" headers + "N: " prefixed lines
  */
 import { normalize } from './ranges.ts'
 import type { Segment } from './types.ts'
@@ -72,12 +72,16 @@ export interface MountBlockOptions {
   missing: Segment[]
 }
 
-/** Render the new-content block: marker head + one header/body pair per missing range. */
+/** Render the new-content block: marker head + one header/body pair per missing range.
+ * Each body line is prefixed with `N: ` to match native read output. */
 export function renderMountBlock(opts: MountBlockOptions): string {
   const out = [markerHead(opts.path, opts.hash, opts.mounted)]
   for (const seg of normalize(opts.missing)) {
     out.push(`--- ${formatRange(seg.start, seg.end)} ---`)
-    out.push(opts.lines.slice(seg.start - opts.windowStart, seg.end - opts.windowStart + 1).join('\n'))
+    for (let lineNo = seg.start; lineNo <= seg.end; lineNo++) {
+      const text = opts.lines[lineNo - opts.windowStart] ?? ''
+      out.push(`${lineNo}: ${text}`)
+    }
   }
   return out.join('\n')
 }

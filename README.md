@@ -51,7 +51,7 @@ npx @deepseek-ai/dsh --profile web
 
 插件挂在 `tools/post-execute` 拦截面，按工具名分流：
 
-1. **read**：以 canonical value（path/offset/lines/totalLines）为准确定本次窗口；经 stat 校验式缓存（mtime+size 快路径 + sha256）核实磁盘身份后三分支决策：完全覆盖 → 结果换成去重 marker（同一个文件在两次真实消息之间只发第一条去重纸条，重复去重静默合并节省）；部分覆盖 / hash 变化 → **缺失或改动的正文写进本次 read 的工具结果**（`cancel` 清 inbox 最多丢掉账本纸条，下次当没挂过再发），纸条只留 head-only 账本声明；hash 变化时拿行级底稿做 diff，**只补改动的行**（没动的行号平移），没底稿或改动过大则整本重挂。首次挂载仍保留原生 read 正文 + head-only 纸条。
+1. **read**：以 canonical value（path/offset/lines/totalLines）为准确定本次窗口；经 stat 校验式缓存（mtime+size 快路径 + sha256）核实磁盘身份后三分支决策：完全覆盖 → 结果换成去重 marker（同一个文件在两次真实消息之间只发第一条去重纸条，重复去重静默合并节省）；部分覆盖 / hash 变化 → **缺失或改动的正文写进本次 read 的工具结果**（每行带 `N: ` 行号，与原生 read 对齐；`cancel` 清 inbox 最多丢掉账本纸条，下次当没挂过再发），纸条只留 head-only 账本声明；hash 变化时拿行级底稿做 diff，**只补改动的行**（没动的行号平移），没底稿或改动过大则整本重挂。首次挂载仍保留原生 read 正文 + head-only 纸条。
 2. **write**：AI 写完整文件，整本书标记为「已知道」，回头读直接免单；缓存指纹同时作废。
 3. **edit**：标记缓存失效但保留行指纹底稿，下一次读必重读盘并走行级 diff，只补改动行。
 4. 挂载状态结构化写入注入消息的 source（标准 `user/message` 事件），恢复重放与浏览器折叠共用同一载体、同一套合并规则（`mount-source.ts`）。
