@@ -1,32 +1,30 @@
-/** Mounted-files dashboard: progress bars, search, sort, net savings + a rough
+/** Mounted-files dashboard: coverage map, search, sort, net savings + a rough
  * CNY figure (plan items 16 + 17), matching the DSH tab styling. */
 
 import { useMemo, useRef, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  FRESHNESS_TIERS,
   MountFold,
   freshnessLevel,
-  nearestTier,
-  tierOf,
   worstFreshness,
-  type FreshnessSettingsApi,
-  type FreshnessTierId,
 } from './mounted-files.ts'
 import { formatRange } from '../render.ts'
 import css from './MountedFilesView.module.css'
 
-export type MountedFilesViewProps = ConvViewProps & PropsLocale<'file-mount'> & {
-  /** Host settings face for the tier picker (absent in environments without a connection). */
-  api?: FreshnessSettingsApi
-}
+export type MountedFilesViewProps = ConvViewProps & PropsLocale<'file-mount'>
 
 /** Rough conversion for the savings figure: yuan per one million tokens. */
 const CNY_PER_MILLION_TOKENS = 1
 
 function mountedLines(mount: { ranges: { start: number; end: number }[] }): number {
   return mount.ranges.reduce((n, range) => n + (range.end - range.start + 1), 0)
+}
+
+function splitPath(path: string): { dir: string; name: string } {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  if (i < 0) return { dir: '', name: path }
+  return { dir: path.slice(0, i), name: path.slice(i + 1) }
 }
 
 /** Map a freshness level to its locale key (typed lookup). */
@@ -46,12 +44,12 @@ function levelKey(level: keyof typeof LEVEL_KEYS) {
  * Dashboard over the conversation snapshot: fold the injected mount messages
  * through a persistent {@link MountFold} (one per view instance), so mounts
  * whose messages scroll out of the client's paginated history window stay on
- * the dashboard, then render one row per file with a progress bar, search,
+ * the dashboard, then render one row per file with a coverage map, search,
  * and sorting. The fold resets when the conversation (sessionId) changes.
  * @param props - slot standard kit (useSession) plus the view locale seat.
  * @returns the mounted-files dashboard, or the localized empty hint.
  */
-export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) {
+export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
   const sessionId = useSession((snapshot) => snapshot.sessionId)
   const nodes = useSession((snapshot) => snapshot.nodes)
   const foldRef = useRef<MountFold | undefined>(undefined)
@@ -64,12 +62,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
   const [showHelp, setShowHelp] = useState(false)
   // Freshness segment rows are expanded by default; clicking collapses one file.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
-  // User-chosen freshness tier (null = follow the threshold the host stamped).
-  const [tierId, setTierId] = useState<FreshnessTierId | null>(null)
-  // The threshold the host stamped on the latest mount source (follows the
-  // host settings, which the picker itself updates through the api).
   const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.6
-  const effectiveThreshold = tierId === null ? foldedThreshold : tierOf(tierId)
 
   const { savedTotal, spentTotal, netTotal } = useMemo(() => {
     let saved = 0
@@ -95,6 +88,13 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
       ? a.path.localeCompare(b.path)
       : (b.savedTokens - b.spentTokens) - (a.savedTokens - a.spentTokens))
   const cny = (Math.max(0, netTotal) / 1_000_000) * CNY_PER_MILLION_TOKENS
+
+  const toggle = (path: string) => {
+    const next = new Set(collapsed)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    setCollapsed(next)
+  }
 
   return (
     <div className={css.root} data-mount-list>
@@ -124,36 +124,15 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
           <option value="net">{t('list.sortNet')}</option>
           <option value="path">{t('list.sortPath')}</option>
         </select>
-        <div className={css.tierControl}>
-          <select
-            className={css.sort}
-            data-mount-tier
-            title={t('tier.hint')}
-            aria-label={t('tier.label')}
-            value={tierId ?? nearestTier(foldedThreshold)}
-            onChange={(event) => {
-              const id = event.target.value as FreshnessTierId
-              setTierId(id)
-              // Push to the host: the settings namespace update persists and
-              // re-stamps future mount sources; the local override already
-              // re-renders this view immediately.
-              api?.update({ ns: 'file-mount', patch: { freshnessThreshold: tierOf(id) } }).catch(() => {})
-            }}
-          >
-            {FRESHNESS_TIERS.map((tier) => (
-              <option key={tier.id} value={tier.id}>{t(`tier.${tier.id}`)} ({tier.threshold})</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            className={css.tierHelp + (showHelp ? ' ' + css.tierHelpActive : '')}
-            onClick={() => setShowHelp(!showHelp)}
-            title={t('tier.hint')}
-            aria-label={t('tier.label')}
-          >
-            ?
-          </button>
-        </div>
+        <button
+          type="button"
+          className={css.tierHelp + (showHelp ? ' ' + css.tierHelpActive : '')}
+          onClick={() => setShowHelp(!showHelp)}
+          title={t('help.title')}
+          aria-label={t('help.title')}
+        >
+          ?
+        </button>
       </div>
       {showHelp && (
         <div className={css.helpCard} data-mount-help-card>
@@ -162,11 +141,11 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
             <button type="button" className={css.helpClose} onClick={() => setShowHelp(false)}>{t('help.close')}</button>
           </div>
           <div className={css.helpSection}>
-            <div className={css.helpSectionTitle}>• {t('help.modelTitle')}</div>
+            <div className={css.helpSectionTitle}>{t('help.modelTitle')}</div>
             <div className={css.helpSectionDesc}>{t('help.modelDesc')}</div>
           </div>
           <div className={css.helpSection}>
-            <div className={css.helpSectionTitle}>• {t('help.savingsTitle')}</div>
+            <div className={css.helpSectionTitle}>{t('help.savingsTitle')}</div>
             <div className={css.helpSectionDesc}>{t('help.savingsDesc')}</div>
           </div>
         </div>
@@ -175,28 +154,22 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
         const lines = mountedLines(mount)
         const pct = mount.totalLines > 0 ? Math.min(100, Math.round((lines / mount.totalLines) * 100)) : 0
         const isCollapsed = collapsed.has(mount.path)
-        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens, { expired: seg.expired }))
+        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, foldedThreshold, seg.tokens, { expired: seg.expired }))
         const worst = worstFreshness(levels)
         const netDiff = mount.savedTokens - mount.spentTokens
+        const { dir, name } = splitPath(mount.path)
+        const coverageTitle = t('row.coverageTitle')
         return (
           <div key={mount.path} className={css.row} data-mount-row data-mount-kind={mount.mountKind}>
             <div
               className={css.pathRow}
               role="button"
               tabIndex={0}
-              onClick={() => {
-                const next = new Set(collapsed)
-                if (isCollapsed) next.delete(mount.path)
-                else next.add(mount.path)
-                setCollapsed(next)
-              }}
+              onClick={() => toggle(mount.path)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault()
-                  const next = new Set(collapsed)
-                  if (isCollapsed) next.delete(mount.path)
-                  else next.add(mount.path)
-                  setCollapsed(next)
+                  toggle(mount.path)
                 }
               }}
             >
@@ -207,27 +180,49 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
                 aria-expanded={!isCollapsed}
                 onClick={(event) => {
                   event.stopPropagation()
-                  const next = new Set(collapsed)
-                  if (isCollapsed) next.delete(mount.path)
-                  else next.add(mount.path)
-                  setCollapsed(next)
+                  toggle(mount.path)
                 }}
               >
                 {isCollapsed ? '▸' : '▾'}
               </button>
-              <div className={css.path} title={mount.path}>{mount.path}</div>
+              <div className={css.pathBlock} title={mount.path}>
+                <div className={css.pathName}>{name}</div>
+                {dir.length > 0 && <div className={css.pathDir}>{dir}</div>}
+              </div>
               <span className={css.freshnessDot + ' ' + (css['freshnessDot_' + worst] ?? '')} data-mount-file-freshness={worst} title={t(levelKey(worst))} />
             </div>
-            <div className={css.progress} data-mount-progress role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-              <div className={css.progressFill} style={{ width: `${pct}%` }} />
+            <div className={css.coverage} title={coverageTitle}>
+              <span className={css.coverageLabel} data-mount-lines>
+                {t('row.coverage').replace('{n}', String(lines)).replace('{total}', String(mount.totalLines))}
+              </span>
+              <div
+                className={css.coverageTrack}
+                data-mount-progress
+                role="progressbar"
+                aria-label={coverageTitle}
+                aria-valuenow={pct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                {mount.totalLines > 0 && mount.ranges.map((seg, i) => {
+                  const left = ((seg.start - 1) / mount.totalLines) * 100
+                  const width = ((seg.end - seg.start + 1) / mount.totalLines) * 100
+                  return (
+                    <span
+                      key={i}
+                      className={css.coverageSeg}
+                      style={{ left: `${left}%`, width: `${Math.max(width, 0.6)}%` }}
+                    />
+                  )
+                })}
+              </div>
             </div>
             <div className={css.meta}>
               <span className={css.badge + ' ' + (css['badge_' + mount.mountKind] ?? '')} data-mount-badge>{t(`kind.${mount.mountKind}`)}</span>
               <span className={css.ranges} data-mount-ranges>
                 {mount.ranges.map((range) => formatRange(range.start, range.end)).join(', ')}
               </span>
-              <span className={css.hash} data-mount-hash>{t('list.hash')} {mount.hash.slice(0, 8)}</span>
-              <span className={css.lines} data-mount-lines>{lines}/{mount.totalLines} {t('list.lines')}</span>
+              <span className={css.hash} data-mount-hash title={t('list.hash')}>{mount.hash.slice(0, 8)}</span>
               <span className={css.saved + (netDiff > 0 ? ' ' + css.savedPositive : '')} data-mount-net>
                 {t('row.net').replace('{n}', String(netDiff))}
               </span>
@@ -238,7 +233,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
             {!isCollapsed && mount.ranges.length > 0 && (
               <div className={css.segmentsList}>
                 {mount.ranges.map((seg, i) => {
-                  const level = freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens, { expired: seg.expired })
+                  const level = freshnessLevel(seg.born, mount.contextL, foldedThreshold, seg.tokens, { expired: seg.expired })
                   return (
                     <div key={i} className={css.segment} data-mount-segment data-freshness={level}>
                       <span className={css.segmentBar + ' ' + (css['segmentBar_' + level] ?? '')} />

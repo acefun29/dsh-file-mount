@@ -1,12 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
 import {
-  FRESHNESS_TIERS,
   MountFold,
   foldMounts,
   freshnessLevel,
-  nearestTier,
-  tierOf,
   worstFreshness,
 } from '../../src/client/mounted-files.ts'
 
@@ -158,25 +155,6 @@ describe('worstFreshness', () => {
     expect(worstFreshness(['fresh', 'ok', 'warn'])).toBe('warn')
     expect(worstFreshness(['fresh', 'ok'])).toBe('ok')
     expect(worstFreshness(['fresh'])).toBe('fresh')
-  })
-})
-
-describe('freshness tiers', () => {
-  it('maps each tier id to its threshold (score below it counts as expired)', () => {
-    expect(tierOf('lenient')).toBe(0.45)
-    expect(tierOf('standard')).toBe(0.55)
-    expect(tierOf('sensitive')).toBe(0.65)
-    expect(tierOf('aggressive')).toBe(0.75)
-    expect(FRESHNESS_TIERS).toHaveLength(4)
-  })
-
-  it('picks the nearest tier for an arbitrary threshold', () => {
-    expect(nearestTier(0.45)).toBe('lenient')
-    expect(nearestTier(0.56)).toBe('standard')
-    expect(nearestTier(0.66)).toBe('sensitive')
-    expect(nearestTier(0.74)).toBe('aggressive')
-    expect(nearestTier(0)).toBe('lenient')
-    expect(nearestTier(1)).toBe('aggressive')
   })
 })
 

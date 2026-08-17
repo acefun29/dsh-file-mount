@@ -64,7 +64,9 @@ describe('MountedFilesView', () => {
     expect(rows[0]!.querySelector('[data-mount-badge]')?.textContent).toBe(zh['kind.new'])
     expect(rows[0]!.querySelector('[data-mount-ranges]')?.textContent).toBe('L1-50')
     expect(rows[0]!.querySelector('[data-mount-hash]')?.textContent).toContain('abcdef01')
-    expect(rows[0]!.querySelector('[data-mount-lines]')?.textContent).toBe('50/100 ' + zh['list.lines'])
+    expect(rows[0]!.querySelector('[data-mount-lines]')?.textContent).toBe(
+      zh['row.coverage'].replace('{n}', '50').replace('{total}', '100'),
+    )
     expect(rows[0]!.querySelector('[data-mount-progress]')?.getAttribute('aria-valuenow')).toBe('50')
     expect(rows[0]!.querySelector('[data-mount-net]')?.textContent).toBe(zh['row.net'].replace('{n}', '0'))
     expect(rows[0]!.getAttribute('data-mount-kind')).toBe('new')
@@ -114,57 +116,5 @@ describe('MountedFilesView', () => {
     rerender(<MountedFilesView {...props} />)
     expect(container.querySelectorAll('[data-mount-row]')).toHaveLength(1)
     expect(container.querySelector('[data-mount-empty]')).toBeNull()
-  })
-
-  it('tier picker overrides the freshness level and pushes the threshold to the host', async () => {
-    const nodes: ConversationNode[] = [
-      {
-        kind: 'assistant',
-        seq: 1,
-        time: 1000,
-        turn: 1,
-        step: 1,
-        blocks: [],
-        usage: { inputTokens: 120000, outputTokens: 1 },
-        messageId: 'm1' as never,
-      } as unknown as ConversationNode,
-      {
-        kind: 'context',
-        seq: 2,
-        time: 2000,
-        content: [{ type: 'text', text: 'block' }],
-        source: {
-          kind: 'plugin',
-          plugin: 'file-mount',
-          form: 'notice',
-          summary: 'mounted L1-50',
-          path: 'src/a.ts',
-          hash: 'abcdef0123456789',
-          totalLines: 100,
-          // born 60000 at L 120000 → score ≈ 0.62: warn at standard 0.55,
-          // expired at the aggressive 0.75 tier.
-          mounted: [{ start: 1, end: 50, born: 60000, expired: 0 }],
-          added: [{ start: 1, end: 50 }],
-          mountKind: 'new',
-          savedTokens: 0,
-          freshnessThreshold: 0.55,
-        },
-        provenance: { role: 'inject', label: 'file-mount' },
-        form: null,
-      },
-    ]
-    const api = { update: vi.fn().mockResolvedValue({}) }
-    const { container } = render(<MountedFilesView {...viewProps(nodes)} api={api} />)
-    const dot = container.querySelector('[data-mount-file-freshness]')
-    expect(dot?.getAttribute('data-mount-file-freshness')).toBe('warn')
-    // The picker defaults to the tier nearest the folded threshold (0.55 = standard).
-    expect((container.querySelector('[data-mount-tier]') as HTMLSelectElement).value).toBe('standard')
-    // Switch to the aggressive tier: the level flips to expired immediately
-    // and the new threshold is pushed through the settings api.
-    const select = container.querySelector('[data-mount-tier]') as HTMLSelectElement
-    select.value = 'aggressive'
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-    expect(container.querySelector('[data-mount-file-freshness]')?.getAttribute('data-mount-file-freshness')).toBe('expired')
-    expect(api.update).toHaveBeenCalledWith({ ns: 'file-mount', patch: { freshnessThreshold: 0.75 } })
   })
 })

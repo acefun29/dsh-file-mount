@@ -12,7 +12,6 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { MountedFilesView } from './MountedFilesView.tsx'
 import { en, NS, zh } from './locales.ts'
-import type { FreshnessSettingsApi } from './mounted-files.ts'
 
 /** Required services: the slot registry and the locale service. */
 export const inject = ['slots', 'locale']
@@ -36,12 +35,5 @@ export function apply(ctx: Context): void {
     order: 20,
     locale: NS,
     label: () => t('view.fileMount'),
-    // The tier picker writes through the connection's settings face; resolve
-    // it lazily (absent in environments without a connection — the picker
-    // then only overrides the local display).
-    inject: (): { api?: FreshnessSettingsApi } => {
-      const api = (ctx.get('connection') as { api?: FreshnessSettingsApi } | undefined)?.api
-      return api === undefined ? {} : { api }
-    },
   }, MountedFilesView))
 }

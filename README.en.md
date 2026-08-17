@@ -7,7 +7,7 @@ Ported from [piwpi](https://github.com/earendil-works/pi-mono)'s context-mount m
 ## What it does
 
 - **Model side**: already-mounted ranges are never re-sent (dedup marker); missing or changed lines ride the durable tool result (increment / remount), and the plugin notice is a ledger declaration only; file edits re-send only the changed lines (append-only logs only re-send the new tail); files the AI just wrote are mounted as already known and read for free; a `file_mount_forget` tool lets the model force a fresh re-read.
-- **UI side**: the Mounted Files tab is a dashboard; each file row expands into its **segments**, each with a **freshness bar** (green=fresh / yellow=aging / orange=stale / red=expired / grey=unknown) and an **expired-count badge**; plus progress bars, search, sorting, and the net-savings/CNY header; remounted rows carry a "changed, remounted" badge.
+- **UI side**: the Mounted Files tab is a dashboard; each file row expands into its **segments**, each with a **freshness bar** (green=fresh / yellow=aging / orange=stale / red=expired / grey=unknown) and an **expired-count**; plus a **coverage map** (filled spans show which lines are already in context), search, sorting, and the net-savings/CNY header; remounted rows carry a "remounted" mark.
 - **Savings accounting**: CJK characters count as 1 token each, other characters as chars ÷ 4; both saved tokens and the plugin's own note overhead are tracked, and the UI shows the NET figure; optional cross-session totals persist to a `statsFile`.
 
 ## Install
@@ -40,7 +40,7 @@ One package, two halves: `dsh.bundle.patch` mounts the host plugin row; the `dsh
     excludeGlobs: ['**/node_modules/**']  # these paths always pass through
     statsFile: ./dsh-file-mount-stats.json  # optional cross-session totals file
     freshnessEnabled: true        # freshness: on by default
-    freshnessThreshold: 0.6       # score below this expires (default 0.6); panel tiers 0.45 / 0.55 / 0.65 / 0.75 (higher = re-send sooner)
+    freshnessThreshold: 0.6       # internal cutoff; the dashboard no longer offers live tiers
     safeRatio: 0.85               # pressure is 0 below 0.85×window, so mounts last most of the session
     pinAfter: 1                   # pin after one expiry — a segment is re-sent at most once
     contextWindow: 128000         # default W when the session has not reported a window
@@ -57,7 +57,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
 5. Compaction awareness: canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are skipped.
 6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read). The dedup marker tells it to forget then re-read when the mounted content is not in the conversation.
-7. **Freshness (pressure × depth)**: each mounted segment records its carrier message `seq`; sweep recomputes `pos` as the prefix sum of visible events before that seq (correct after compaction; legacy `born` is used as `pos` when `seq` is missing). `L` is the DISJOINT usage sum when present, otherwise the prefix sum; `W` comes from `session.requestContext()?.contextWindow`, else the configured default. **Nothing expires before 0.85×window**; near the cap, deeper content scores lower. **Segments scoring below the threshold leave the ledger**; after one expiry (`pinAfter` default 1) the segment stays mounted. **Re-read safety valve** and live panel tiers still apply.
+7. **Freshness (pressure × depth)**: each mounted segment records its carrier message `seq`; sweep recomputes `pos` as the prefix sum of visible events before that seq (correct after compaction; legacy `born` is used as `pos` when `seq` is missing). `L` is the DISJOINT usage sum when present, otherwise the prefix sum; `W` comes from `session.requestContext()?.contextWindow`, else the configured default. **Nothing expires before 0.85×window**; near the cap, deeper content scores lower. **Segments scoring below the threshold leave the ledger**; after one expiry (`pinAfter` default 1) the segment stays mounted. **Re-read safety valve** still applies. Freshness is no longer adjustable from the dashboard.
 Path identity: absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold).
 
 ## Known limitations
