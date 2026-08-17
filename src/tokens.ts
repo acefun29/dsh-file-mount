@@ -4,8 +4,15 @@
  * uses the ÷4 rule. A precise tokenizer is deferred.
  */
 
-/** One code point that counts as a full token (CJK + fullwidth + Hangul + kana). */
-const CJK_CHAR = /[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\uac00-\ud7af]/
+/** CJK + fullwidth + Hangul + kana code points, matching the old character class. */
+function isCjkCodePoint(cp: number): boolean {
+  return (cp >= 0x3000 && cp <= 0x30ff)
+    || (cp >= 0x3400 && cp <= 0x4dbf)
+    || (cp >= 0x4e00 && cp <= 0x9fff)
+    || (cp >= 0xac00 && cp <= 0xd7af)
+    || (cp >= 0xf900 && cp <= 0xfaff)
+    || (cp >= 0xff00 && cp <= 0xffef)
+}
 
 /**
  * Estimate the token count of a model-facing text: CJK characters count as
@@ -15,7 +22,7 @@ export function estimateTokens(text: string): number {
   let cjk = 0
   let other = 0
   for (const char of text) {
-    if (CJK_CHAR.test(char)) cjk++
+    if (isCjkCodePoint(char.codePointAt(0)!)) cjk++
     else other++
   }
   return Math.max(1, cjk + Math.ceil(other / 4))

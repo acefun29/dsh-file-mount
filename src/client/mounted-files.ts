@@ -116,6 +116,18 @@ export function freshnessLevel(
   return 'fresh'
 }
 
+/**
+ * File-level freshness: expired beats warn beats ok; unknown is its own
+ * gray state and must not collapse to green fresh.
+ */
+export function worstFreshness(levels: readonly FreshnessLevel[]): FreshnessLevel {
+  if (levels.includes('expired')) return 'expired'
+  if (levels.includes('warn')) return 'warn'
+  if (levels.includes('ok')) return 'ok'
+  if (levels.includes('unknown') || levels.length === 0) return 'unknown'
+  return 'fresh'
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }

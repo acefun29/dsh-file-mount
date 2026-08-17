@@ -68,6 +68,10 @@ describe('MountedFilesView', () => {
     expect(rows[0]!.querySelector('[data-mount-progress]')?.getAttribute('aria-valuenow')).toBe('50')
     expect(rows[0]!.querySelector('[data-mount-net]')?.textContent).toBe(zh['row.net'].replace('{n}', '0'))
     expect(rows[0]!.getAttribute('data-mount-kind')).toBe('new')
+    // No born / no usage → unknown, not green fresh.
+    expect(rows[0]!.querySelector('[data-mount-file-freshness]')?.getAttribute('data-mount-file-freshness')).toBe('unknown')
+    expect(container.querySelector('[data-mount-summary]')?.getAttribute('title'))
+      .toBe(zh['summary.breakdown'].replace('{saved}', '0').replace('{spent}', '0'))
   })
 
   it('re-renders when the folded ledger changes', () => {

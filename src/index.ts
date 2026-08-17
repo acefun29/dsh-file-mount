@@ -50,7 +50,7 @@ import type { ExpiredSegment, LedgerSegment, MountKind, MountedFile, MountSource
 
 export { FileContentCache } from './file-cache.ts'
 export { MountStore, type LedgerRecord } from './store.ts'
-export { normalize, subtract, clamp, type LineRange } from './ranges.ts'
+export { normalize, subtract, type LineRange } from './ranges.ts'
 export { hashBuffer } from './hash.ts'
 export { normalizeAbsPath } from './paths.ts'
 export {

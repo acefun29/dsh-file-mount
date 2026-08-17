@@ -24,6 +24,7 @@ export type FileMountKey =
   | 'kind.dedup'
   | 'summary.netTotal'
   | 'summary.cny'
+  | 'summary.breakdown'
   | 'row.net'
   | 'row.changed'
   | 'freshness.fresh'
@@ -68,6 +69,7 @@ export const zh: Record<FileMountKey, string> = {
   'kind.dedup': '去重',
   'summary.netTotal': '本次会话净节省 ≈ {n} tokens',
   'summary.cny': '（约 ¥{n}）',
+  'summary.breakdown': '累计去重节省 {saved} tokens，状态通知开销 {spent} tokens',
   'row.net': '净节省 ≈ {n} tokens',
   'row.changed': '文件已变更，已重挂',
   'freshness.fresh': '新鲜',
@@ -106,6 +108,7 @@ export const en: Record<FileMountKey, string> = {
   'kind.dedup': 'dedup',
   'summary.netTotal': 'Net saved this session ≈ {n} tokens',
   'summary.cny': '(≈ ¥{n})',
+  'summary.breakdown': 'Dedup saved {saved} tokens, notice overhead {spent} tokens',
   'row.net': 'net ≈ {n} tokens',
   'row.changed': 'changed, remounted',
   'freshness.fresh': 'fresh',

@@ -10,6 +10,7 @@ import {
   freshnessLevel,
   nearestTier,
   tierOf,
+  worstFreshness,
   type FreshnessSettingsApi,
   type FreshnessTierId,
 } from './mounted-files.ts'
@@ -100,7 +101,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
       <div
         className={css.summary + (netTotal > 0 ? ' ' + css.summaryPositive : ' ' + css.summaryNeutral)}
         data-mount-summary
-        title={`累计去重节省 ${savedTotal} tokens，状态通知开销 ${spentTotal} tokens`}
+        title={t('summary.breakdown').replace('{saved}', String(savedTotal)).replace('{spent}', String(spentTotal))}
       >
         <span data-mount-net-total>{t('summary.netTotal').replace('{n}', String(netTotal))}</span>
         <span className={css.cny} data-mount-cny>{t('summary.cny').replace('{n}', cny.toFixed(2))}</span>
@@ -175,7 +176,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
         const pct = mount.totalLines > 0 ? Math.min(100, Math.round((lines / mount.totalLines) * 100)) : 0
         const isCollapsed = collapsed.has(mount.path)
         const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens, { expired: seg.expired }))
-        const worst = levels.includes('expired') ? 'expired' : levels.includes('warn') ? 'warn' : levels.includes('ok') ? 'ok' : 'fresh'
+        const worst = worstFreshness(levels)
         const netDiff = mount.savedTokens - mount.spentTokens
         return (
           <div key={mount.path} className={css.row} data-mount-row data-mount-kind={mount.mountKind}>

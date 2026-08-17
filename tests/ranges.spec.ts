@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clamp, normalize, subtract } from '../src/ranges.ts'
+import { normalize, subtract } from '../src/ranges.ts'
 
 describe('normalize', () => {
   it('returns an empty list for no input', () => {
@@ -83,23 +83,5 @@ describe('subtract', () => {
       { start: 21, end: 29 },
       { start: 41, end: 45 },
     ])
-  })
-})
-
-describe('clamp', () => {
-  it('shrinks a range past the file end', () => {
-    expect(clamp({ start: 80, end: 200 }, 100)).toEqual({ start: 80, end: 100 })
-  })
-
-  it('returns null when the range starts past the file', () => {
-    expect(clamp({ start: 101, end: 120 }, 100)).toBeNull()
-  })
-
-  it('returns null for an empty file', () => {
-    expect(clamp({ start: 1, end: 10 }, 0)).toBeNull()
-  })
-
-  it('returns the range unchanged when it fits', () => {
-    expect(clamp({ start: 1, end: 50 }, 100)).toEqual({ start: 1, end: 50 })
   })
 })

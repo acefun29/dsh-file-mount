@@ -49,12 +49,3 @@ export function subtract(have: LineRange[], want: LineRange): LineRange[] {
   }
   return missing
 }
-
-/**
- * Truncate a range to a file that shrank to maxEnd lines. Returns null when
- * the range lies entirely past the file (or the file is empty).
- */
-export function clamp(r: LineRange, maxEnd: number): LineRange | null {
-  if (maxEnd < 1 || r.start > maxEnd) return null
-  return { start: r.start, end: Math.min(r.end, maxEnd) }
-}

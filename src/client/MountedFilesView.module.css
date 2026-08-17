@@ -261,6 +261,7 @@
 .freshnessDot_ok { background: #ca8a04; }
 .freshnessDot_warn { background: #ea580c; }
 .freshnessDot_expired { background: #dc2626; }
+.freshnessDot_unknown { background: #94a3b8; }
 
 .progress {
   height: 3px;

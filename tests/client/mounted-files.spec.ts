@@ -7,6 +7,7 @@ import {
   freshnessLevel,
   nearestTier,
   tierOf,
+  worstFreshness,
 } from '../../src/client/mounted-files.ts'
 
 function contextNode(source: Record<string, unknown>, seq = 1, time = 1000): ContextMessageNode {
@@ -142,6 +143,21 @@ describe('freshnessLevel', () => {
 
   it('pins expired >= pinAfter as fresh', () => {
     expect(freshnessLevel(50, 700, 0.6, 0, { ...tight, pinAfter: 2, expired: 2 })).toBe('fresh')
+  })
+})
+
+describe('worstFreshness', () => {
+  it('does not paint unknown as fresh', () => {
+    expect(worstFreshness(['unknown'])).toBe('unknown')
+    expect(worstFreshness([])).toBe('unknown')
+    expect(worstFreshness(['unknown', 'fresh'])).toBe('unknown')
+  })
+
+  it('ranks expired above warn above ok above unknown above fresh', () => {
+    expect(worstFreshness(['fresh', 'ok', 'warn', 'expired'])).toBe('expired')
+    expect(worstFreshness(['fresh', 'ok', 'warn'])).toBe('warn')
+    expect(worstFreshness(['fresh', 'ok'])).toBe('ok')
+    expect(worstFreshness(['fresh'])).toBe('fresh')
   })
 })
 
