@@ -4,13 +4,11 @@
  * hash-change-replaces merge. Editing the fold semantics here edits both
  * halves at once (plan item 20).
  *
- * Freshness (attention-decay plan): each segment carries `born` (context
+ * Freshness (pressure × depth): each segment carries `born` (context
  * position in input tokens at mount time) and `expired` (how many times the
- * content expired and was re-read). The merge rules are: same hash unions
- * segments (adjacent merge keeps the EARLIEST born and the MAX expired), a
- * hash change replaces the entry wholesale; expired segments are pruned off
- * the ledger by the host (they stop deduping) and their count moves into the
- * per-file history so a re-mount inherits it.
+ * content expired and was re-read). Short prompts stay fresh; deep content
+ * decays as the window fills. Segments whose expired count reaches pinAfter
+ * stay on the ledger.
  */
 import type { ExpiredSegment, LedgerSegment, MountKind } from './types.ts'
 
@@ -174,25 +172,38 @@ export interface PruneResult {
 }
 
 export interface FreshnessOptions {
-  lambda?: number
-  alpha?: number
-  Wmax?: number
+  /** Tokens below which pressure is 0 (default 16k; also capped at 0.25 W). */
+  safeTokens?: number
+  /** Expired count at which a segment is pinned (score 1, never pruned). */
+  pinAfter?: number
+  /** Context window W in tokens (default 128k). */
+  contextWindow?: number
+  /** Optional cap: segments larger than this are not expired this round. */
+  resendBudget?: number
+  /** Times this segment has already expired (pin check). */
+  expired?: number
 }
 
 export const DEFAULT_FRESHNESS_CONFIG = {
-  threshold: 0.4,
-  lambda: 0.7,
-  alpha: 0.5,
-  Wmax: 0.5,
+  threshold: 0.6,
+  safeTokens: 16_000,
+  pinAfter: 2,
+  contextWindow: 128_000,
   valveReads: 2,
 } as const
 
+function clamp01(x: number): number {
+  return x < 0 ? 0 : x > 1 ? 1 : x
+}
+
 /**
- * Calculate the U-shaped attention freshness score for one ledger segment.
- * Score = A_bar * W
- * A(p) = 1 - 4 * lambda * p * (1 - p)
- * A_bar = (A(p1) + 4 * A(pm) + A(p2)) / 6 (Simpson's exact integral)
- * W = 1 + min(alpha * sqrt(eta), Wmax) where eta = min(1, S / L)
+ * Pressure × depth freshness: short contexts stay fresh; deep (old) content
+ * decays as the prompt fills the window. Pinned segments (expired >= pinAfter)
+ * always score 1.
+ *
+ * pressure = sqrt(clamp01((L - Lsafe) / (W - Lsafe)))
+ * depth    = clamp01((L - (pos + size/2)) / L)
+ * score    = expired >= pinAfter ? 1 : 1 - pressure * depth
  */
 export function calculateFreshnessScore(
   born: number,
@@ -201,30 +212,25 @@ export function calculateFreshnessScore(
   options?: FreshnessOptions,
 ): number {
   if (contextL < 1) return 1
-  const lambda = options?.lambda ?? DEFAULT_FRESHNESS_CONFIG.lambda
-  const alpha = options?.alpha ?? DEFAULT_FRESHNESS_CONFIG.alpha
-  const Wmax = options?.Wmax ?? DEFAULT_FRESHNESS_CONFIG.Wmax
-
-  const S = (tokens !== undefined && tokens > 0) ? tokens : 0
-  const p1 = Math.max(0, (born - S) / contextL)
-  const p2 = Math.min(1, born / contextL)
-  const pm = (p1 + p2) / 2
-
-  const A = (p: number) => 1 - 4 * lambda * p * (1 - p)
-  const A_bar = (A(p1) + 4 * A(pm) + A(p2)) / 6
-
-  const eta = Math.min(1, S / contextL)
-  const W = 1 + Math.min(alpha * Math.sqrt(eta), Wmax)
-
-  return A_bar * W
+  const pinAfter = options?.pinAfter ?? DEFAULT_FRESHNESS_CONFIG.pinAfter
+  if ((options?.expired ?? 0) >= pinAfter) return 1
+  const W = options?.contextWindow ?? DEFAULT_FRESHNESS_CONFIG.contextWindow
+  const safeTokens = options?.safeTokens ?? DEFAULT_FRESHNESS_CONFIG.safeTokens
+  const Lsafe = Math.min(safeTokens, 0.25 * W)
+  const denom = W - Lsafe
+  const pressure = denom <= 0
+    ? (contextL > Lsafe ? 1 : 0)
+    : Math.sqrt(clamp01((contextL - Lsafe) / denom))
+  const size = tokens !== undefined && tokens > 0 ? tokens : 0
+  const depth = clamp01((contextL - (born + size / 2)) / contextL)
+  return 1 - pressure * depth
 }
 
 /**
- * Lazy freshness check (U-score attention model): a segment is expired when
- * its U-score dips below threshold (Score < freshnessThreshold).
- * Expired segments leave the ledger (they stop deduping; the next read re-sends
- * them) and their expired count moves into the history. Segments without a born
- * (no usage data yet, or pre-freshness messages) or with born >= contextL are never pruned.
+ * Lazy freshness check: a segment is expired when its score dips below
+ * threshold. Pinned segments (expired >= pinAfter) and segments over
+ * resendBudget stay on the ledger. Segments without a born or with
+ * born >= contextL are never pruned.
  */
 export function pruneExpired(
   segments: readonly LedgerSegment[],
@@ -235,15 +241,24 @@ export function pruneExpired(
   if (contextL === undefined || contextL < 1) {
     return { active: [...segments], history: [] }
   }
+  const pinAfter = options?.pinAfter ?? DEFAULT_FRESHNESS_CONFIG.pinAfter
+  const resendBudget = options?.resendBudget
   const active: LedgerSegment[] = []
   const history: ExpiredSegment[] = []
   for (const seg of segments) {
     if (seg.born === undefined || seg.born >= contextL) {
-      // Unknown or impossibly-fresh position: keep (grey/unknown, never prune).
       active.push(seg)
       continue
     }
-    const score = calculateFreshnessScore(seg.born, contextL, seg.tokens, options)
+    if (seg.expired >= pinAfter) {
+      active.push(seg)
+      continue
+    }
+    if (resendBudget !== undefined && seg.tokens !== undefined && seg.tokens > resendBudget) {
+      active.push(seg)
+      continue
+    }
+    const score = calculateFreshnessScore(seg.born, contextL, seg.tokens, { ...options, expired: seg.expired })
     if (score < threshold) history.push({ start: seg.start, end: seg.end, expired: seg.expired + 1 })
     else active.push(seg)
   }

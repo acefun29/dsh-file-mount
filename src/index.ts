@@ -82,16 +82,18 @@ export interface Config {
   maxManagedBytes?: number
   /** Optional path of the cross-session stats file (plan item 24). */
   statsFile?: string
-  /** Freshness tracking (U-shaped attention decay model): segments in middle context expire. */
+  /** Freshness tracking: deep content expires as the prompt fills the window. */
   freshnessEnabled?: boolean
-  /** U-score threshold below which a segment counts as expired (0..1, default 0.4). */
+  /** Score below which a segment counts as expired (0..1, default 0.6). */
   freshnessThreshold?: number
-  /** Valley attention parameter lambda (0..1, default 0.7: valley = 1 - lambda = 0.3). */
-  freshnessLambda?: number
-  /** Volume protection slope alpha (default 0.5). */
-  freshnessAlpha?: number
-  /** Volume protection max bonus Wmax (default 0.5). */
-  freshnessWmax?: number
+  /** Prompt length below which pressure is 0 (default 16000; also capped at 0.25 W). */
+  safeTokens?: number
+  /** Expired count at which a segment is pinned and no longer pruned (default 2). */
+  pinAfter?: number
+  /** Context window W in tokens when the session has not reported one (default 128000). */
+  contextWindow?: number
+  /** Optional cap: do not expire a segment whose token estimate exceeds this. */
+  resendBudget?: number
   /** Re-read safety valve count (integer >= 0, default 2: pass-through on 2nd full intercept; 0 = disabled). */
   valveReads?: number
 }
@@ -107,10 +109,11 @@ export const Config: z<Config> = z.object({
   maxManagedBytes: z.number().step(1).min(1).default(16 * 1024 * 1024),
   statsFile: z.string(),
   freshnessEnabled: z.boolean().default(true),
-  freshnessThreshold: z.number().step(0.01).min(0).max(1).default(0.4),
-  freshnessLambda: z.number().step(0.01).min(0).max(1).default(0.7),
-  freshnessAlpha: z.number().step(0.01).min(0).default(0.5),
-  freshnessWmax: z.number().step(0.01).min(0).default(0.5),
+  freshnessThreshold: z.number().step(0.01).min(0).max(1).default(0.6),
+  safeTokens: z.number().step(1).min(0).default(16_000),
+  pinAfter: z.number().step(1).min(0).default(2),
+  contextWindow: z.number().step(1).min(1).default(128_000),
+  resendBudget: z.number().step(1).min(0),
   valveReads: z.number().step(1).min(0).default(2),
 })
 export const name = 'file-mount'
@@ -197,9 +200,10 @@ export class FileMountService extends Service {
    * host provides one (runtime-adjustable from the dashboard tier picker),
    * the config value otherwise. */
   private freshnessThreshold: number
-  private readonly freshnessLambda: number
-  private readonly freshnessAlpha: number
-  private readonly freshnessWmax: number
+  private readonly safeTokens: number
+  private readonly pinAfter: number
+  private readonly contextWindow: number
+  private readonly resendBudget: number | undefined
   private readonly valveReads: number
   /** Per-session consecutive full-dedup intercept counts for safety valve: agentId -> absPath -> count. */
   private readonly valveCounts = new Map<string, Map<string, number>>()
@@ -213,11 +217,12 @@ export class FileMountService extends Service {
     this.excludeGlobs = resolved.excludeGlobs ?? []
     this.statsFile = resolved.statsFile
     this.freshnessEnabled = resolved.freshnessEnabled ?? true
-    this.configuredFreshnessThreshold = resolved.freshnessThreshold ?? 0.4
+    this.configuredFreshnessThreshold = resolved.freshnessThreshold ?? 0.6
     this.freshnessThreshold = this.configuredFreshnessThreshold
-    this.freshnessLambda = resolved.freshnessLambda ?? 0.7
-    this.freshnessAlpha = resolved.freshnessAlpha ?? 0.5
-    this.freshnessWmax = resolved.freshnessWmax ?? 0.5
+    this.safeTokens = resolved.safeTokens ?? 16_000
+    this.pinAfter = resolved.pinAfter ?? 2
+    this.contextWindow = resolved.contextWindow ?? 128_000
+    this.resendBudget = resolved.resendBudget
     this.valveReads = resolved.valveReads ?? 2
     this.cache = new FileContentCache({
       ...resolved.capacity !== undefined ? { capacity: resolved.capacity } : {},
@@ -607,9 +612,10 @@ export class FileMountService extends Service {
     let mounted = existing.segments
     if (this.freshnessEnabled) {
       const pruned = pruneExpired(mounted, this.contextL.get(agent.id), this.freshnessThreshold, {
-        lambda: this.freshnessLambda,
-        alpha: this.freshnessAlpha,
-        Wmax: this.freshnessWmax,
+        safeTokens: this.safeTokens,
+        pinAfter: this.pinAfter,
+        contextWindow: this.contextWindow,
+        ...this.resendBudget !== undefined ? { resendBudget: this.resendBudget } : {},
       })
       mounted = pruned.active
       history = [...history, ...pruned.history]

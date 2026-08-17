@@ -121,7 +121,7 @@ describe('MountedFilesView', () => {
         turn: 1,
         step: 1,
         blocks: [],
-        usage: { inputTokens: 200, cacheReadTokens: 800, outputTokens: 1 },
+        usage: { inputTokens: 40000, outputTokens: 1 },
         messageId: 'm1' as never,
       } as unknown as ConversationNode,
       {
@@ -137,13 +137,13 @@ describe('MountedFilesView', () => {
           path: 'src/a.ts',
           hash: 'abcdef0123456789',
           totalLines: 100,
-          // born 750 at L 1000 -> score 0.475: warn at the default 0.4,
-          // expired at the aggressive 0.5 tier.
-          mounted: [{ start: 1, end: 50, born: 750, expired: 0 }],
+          // born 5000 at L 40000 → score ≈ 0.595: warn at standard 0.55,
+          // expired at the aggressive 0.75 tier.
+          mounted: [{ start: 1, end: 50, born: 5000, expired: 0 }],
           added: [{ start: 1, end: 50 }],
           mountKind: 'new',
           savedTokens: 0,
-          freshnessThreshold: 0.4,
+          freshnessThreshold: 0.55,
         },
         provenance: { role: 'inject', label: 'file-mount' },
         form: null,
@@ -153,14 +153,14 @@ describe('MountedFilesView', () => {
     const { container } = render(<MountedFilesView {...viewProps(nodes)} api={api} />)
     const dot = container.querySelector('[data-mount-file-freshness]')
     expect(dot?.getAttribute('data-mount-file-freshness')).toBe('warn')
-    // The picker defaults to the tier nearest the folded threshold (0.4 = sensitive).
-    expect((container.querySelector('[data-mount-tier]') as HTMLSelectElement).value).toBe('sensitive')
+    // The picker defaults to the tier nearest the folded threshold (0.55 = standard).
+    expect((container.querySelector('[data-mount-tier]') as HTMLSelectElement).value).toBe('standard')
     // Switch to the aggressive tier: the level flips to expired immediately
     // and the new threshold is pushed through the settings api.
     const select = container.querySelector('[data-mount-tier]') as HTMLSelectElement
     select.value = 'aggressive'
     select.dispatchEvent(new Event('change', { bubbles: true }))
     expect(container.querySelector('[data-mount-file-freshness]')?.getAttribute('data-mount-file-freshness')).toBe('expired')
-    expect(api.update).toHaveBeenCalledWith({ ns: 'file-mount', patch: { freshnessThreshold: 0.5 } })
+    expect(api.update).toHaveBeenCalledWith({ ns: 'file-mount', patch: { freshnessThreshold: 0.75 } })
   })
 })

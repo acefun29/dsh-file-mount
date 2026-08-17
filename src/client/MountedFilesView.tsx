@@ -67,7 +67,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
   const [tierId, setTierId] = useState<FreshnessTierId | null>(null)
   // The threshold the host stamped on the latest mount source (follows the
   // host settings, which the picker itself updates through the api).
-  const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.4
+  const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.6
   const effectiveThreshold = tierId === null ? foldedThreshold : tierOf(tierId)
 
   const { savedTotal, spentTotal, netTotal } = useMemo(() => {
@@ -174,7 +174,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
         const lines = mountedLines(mount)
         const pct = mount.totalLines > 0 ? Math.min(100, Math.round((lines / mount.totalLines) * 100)) : 0
         const isCollapsed = collapsed.has(mount.path)
-        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens))
+        const levels = mount.ranges.map((seg) => freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens, { expired: seg.expired }))
         const worst = levels.includes('expired') ? 'expired' : levels.includes('warn') ? 'warn' : levels.includes('ok') ? 'ok' : 'fresh'
         const netDiff = mount.savedTokens - mount.spentTokens
         return (
@@ -237,7 +237,7 @@ export function MountedFilesView({ useSession, t, api }: MountedFilesViewProps) 
             {!isCollapsed && mount.ranges.length > 0 && (
               <div className={css.segmentsList}>
                 {mount.ranges.map((seg, i) => {
-                  const level = freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens)
+                  const level = freshnessLevel(seg.born, mount.contextL, effectiveThreshold, seg.tokens, { expired: seg.expired })
                   return (
                     <div key={i} className={css.segment} data-mount-segment data-freshness={level}>
                       <span className={css.segmentBar + ' ' + (css['segmentBar_' + level] ?? '')} />

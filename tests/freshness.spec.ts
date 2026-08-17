@@ -1,7 +1,7 @@
 /**
- * Freshness ledger rules (U-shaped attention decay model): normalizeLedger
- * merge semantics, calculateFreshnessScore U-curve math, pruneExpired U-score
- * cutoff, and inheritHistory count carry-over.
+ * Freshness ledger rules (pressure × depth): normalizeLedger merge
+ * semantics, calculateFreshnessScore, pruneExpired cutoff + pin, and
+ * inheritHistory count carry-over.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -10,6 +10,8 @@ import {
   normalizeLedger,
   pruneExpired,
 } from '../src/mount-source.ts'
+
+const tightWindow = { contextWindow: 800, safeTokens: 100, pinAfter: 2 }
 
 describe('normalizeLedger', () => {
   it('merges adjacent segments ONLY when born is identical, summing tokens and taking max expired', () => {
@@ -60,33 +62,32 @@ describe('normalizeLedger', () => {
 })
 
 describe('calculateFreshnessScore', () => {
-  it('returns high score near head (p -> 0) and tail (p -> 1)', () => {
-    // Tail: born = 950, L = 1000 -> p ≈ 0.95 -> Score > 0.85
-    const tailScore = calculateFreshnessScore(950, 1000)
-    expect(tailScore).toBeGreaterThan(0.85)
-
-    // Head: born = 50, L = 1000 -> p ≈ 0.05 -> Score > 0.85
-    const headScore = calculateFreshnessScore(50, 1000)
-    expect(headScore).toBeGreaterThan(0.85)
+  it('keeps short contexts at score 1 (L <= Lsafe)', () => {
+    expect(calculateFreshnessScore(50, 1_000)).toBe(1)
+    expect(calculateFreshnessScore(500, 8_000)).toBe(1)
   })
 
-  it('hits valley score at midpoint p = 0.5 (Score = 1 - lambda = 0.3 for S = 0)', () => {
-    const midScore = calculateFreshnessScore(500, 1000)
-    expect(midScore).toBeCloseTo(0.3, 5)
+  it('does not rise as L grows (monotonic non-increasing)', () => {
+    const born = 100
+    const opts = { contextWindow: 128_000, safeTokens: 16_000 }
+    let previous = calculateFreshnessScore(born, 16_000, 0, opts)
+    for (const L of [20_000, 40_000, 80_000, 128_000]) {
+      const score = calculateFreshnessScore(born, L, 0, opts)
+      expect(score).toBeLessThanOrEqual(previous + 1e-12)
+      previous = score
+    }
   })
 
-  it('boosts score with volume protection when tokens S > 0', () => {
-    // S = 100, L = 1000 -> eta = 0.1, W = 1 + min(0.5 * sqrt(0.1), 0.5) ≈ 1 + 0.158 = 1.158
-    const scoreWithTokens = calculateFreshnessScore(550, 1000, 100)
-    const scoreWithoutTokens = calculateFreshnessScore(550, 1000, 0)
-    expect(scoreWithTokens).toBeGreaterThan(scoreWithoutTokens)
+  it('scores deeper (older) content lower than recent content at the same L', () => {
+    const opts = { contextWindow: 128_000, safeTokens: 16_000 }
+    const oldScore = calculateFreshnessScore(5_000, 40_000, 0, opts)
+    const newScore = calculateFreshnessScore(35_000, 40_000, 0, opts)
+    expect(oldScore).toBeLessThan(newScore)
   })
 
-  it('ensures giant segments (eta >= 0.444) never drop below 0.40 at valley', () => {
-    // Single segment occupying 45% of context (S = 450, L = 1000)
-    // Center of segment at midpoint (born = 725, S = 450 -> p1 = 0.275, p2 = 0.725, pm = 0.5)
-    const giantScore = calculateFreshnessScore(725, 1000, 450)
-    expect(giantScore).toBeGreaterThanOrEqual(0.40)
+  it('pins at expired >= pinAfter', () => {
+    const opts = { contextWindow: 800, safeTokens: 100, pinAfter: 2, expired: 2 }
+    expect(calculateFreshnessScore(50, 700, 0, opts)).toBe(1)
   })
 })
 
@@ -113,31 +114,41 @@ describe('pruneExpired', () => {
     expect(r.history).toEqual([])
   })
 
-  it('prunes mid-window segments where U-score < 0.4', () => {
-    // born 500, L 1000 -> p = 0.5, score = 0.3 < 0.4 -> expired
-    const r = pruneExpired([{ start: 1, end: 5, born: 500, expired: 3 }], 1000)
+  it('does not prune short contexts', () => {
+    const r = pruneExpired([{ start: 1, end: 5, born: 100, expired: 0 }], 1_000)
+    expect(r.active).toHaveLength(1)
+    expect(r.history).toEqual([])
+  })
+
+  it('prunes deep content once the window fills past Lsafe', () => {
+    const r = pruneExpired(
+      [{ start: 1, end: 5, born: 50, expired: 0 }],
+      700,
+      0.6,
+      tightWindow,
+    )
     expect(r.active).toEqual([])
-    expect(r.history).toEqual([{ start: 1, end: 5, expired: 4 }])
+    expect(r.history).toEqual([{ start: 1, end: 5, expired: 1 }])
   })
 
-  it('keeps head segments (head zone immortality: Score > 0.4 when L > 3.23 * born)', () => {
-    // born 100, L 1000 -> p = 0.1, Score ≈ 1 - 4 * 0.7 * 0.1 * 0.9 = 1 - 0.252 = 0.748 >= 0.4
-    const r = pruneExpired([{ start: 1, end: 5, born: 100, expired: 0 }], 1000)
+  it('keeps recent (shallow) content at the same L', () => {
+    const r = pruneExpired(
+      [{ start: 1, end: 5, born: 680, expired: 0 }],
+      700,
+      0.6,
+      tightWindow,
+    )
     expect(r.active).toHaveLength(1)
     expect(r.history).toEqual([])
   })
 
-  it('keeps tail segments (tail zone: Score > 0.4 when born ≈ L)', () => {
-    // born 950, L 1000 -> p = 0.95, Score ≈ 0.867 >= 0.4
-    const r = pruneExpired([{ start: 1, end: 5, born: 950, expired: 0 }], 1000)
-    expect(r.active).toHaveLength(1)
-    expect(r.history).toEqual([])
-  })
-
-  it('honors custom threshold and lambda configuration', () => {
-    // born 500, L 1000 -> score = 0.3
-    // With threshold = 0.2, score 0.3 >= 0.2 -> kept
-    const r = pruneExpired([{ start: 1, end: 5, born: 500, expired: 0 }], 1000, 0.2)
+  it('does not prune a pinned segment (expired >= pinAfter)', () => {
+    const r = pruneExpired(
+      [{ start: 1, end: 5, born: 50, expired: 2 }],
+      700,
+      0.6,
+      tightWindow,
+    )
     expect(r.active).toHaveLength(1)
     expect(r.history).toEqual([])
   })

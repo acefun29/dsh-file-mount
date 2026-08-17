@@ -585,11 +585,11 @@ describe('file-mount integration', () => {
       textWithUsage('hi', 100),
       toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }, 110),
       textWithUsage('ok', 150),
-      textWithUsage('grow', 300),
-      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 310),
-      textWithUsage('done', 350),
+      textWithUsage('grow', 800),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 810),
+      textWithUsage('done', 850),
     ])
-    const ctx = await harness(adapter, { cwd: dir })
+    const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 600, safeTokens: 100 } })
     const agent = ctx.agentLoop.create(SessionId('it-freshness'), { provider: 'mock', model: 'mock' })
     send(agent, 'hello')
     await waitForIdle(ctx, agent)
@@ -612,7 +612,7 @@ describe('file-mount integration', () => {
     const second = sources[1]!['mounted'] as { start: number; end: number; born?: number; expired: number }[]
     expect(geo(second)).toEqual([{ start: 1, end: 3 }])
     expect(second[0]!.expired).toBe(1)
-    expect(second[0]!.born).toBeGreaterThan(310)
+    expect(second[0]!.born).toBeGreaterThan(810)
     expect(resultText(agent, 'c2')).toContain('--- L1-3 ---')
   })
 
@@ -632,7 +632,7 @@ describe('file-mount integration', () => {
       toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 400, 2000),
       textWithUsageCached('done', 500, 2000),
     ])
-    const ctx = await harness(adapter, { cwd: dir })
+    const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 4000, safeTokens: 100 } })
     const agent = ctx.agentLoop.create(SessionId('it-clock-cached'), { provider: 'mock', model: 'mock' })
     send(agent, 'hello')
     await waitForIdle(ctx, agent)
@@ -715,15 +715,15 @@ describe('file-mount integration', () => {
     await waitForIdle(ctx, agent)
     // The config value is the base layer: the first mount stamps it.
     const first = mountMessages(agent)
-    expect(first[0]!['freshnessThreshold']).toBe(0.4)
+    expect(first[0]!['freshnessThreshold']).toBe(0.6)
     // A runtime tier change flows into the ledger: update the namespace, then
     // the next mount source carries the new effective threshold.
-    await fileMountNs().update({ freshnessThreshold: 0.5 })
+    await fileMountNs().update({ freshnessThreshold: 0.75 })
     send(agent, 'read b')
     await waitForIdle(ctx, agent)
     const sources = mountMessages(agent)
     expect(sources).toHaveLength(2)
-    expect(sources[sources.length - 1]!['freshnessThreshold']).toBe(0.5)
+    expect(sources[sources.length - 1]!['freshnessThreshold']).toBe(0.75)
   })
 
   it('re-read safety valve: 2nd consecutive full dedup triggers native pass-through and resets counter', async () => {
@@ -912,7 +912,7 @@ describe('file-mount integration', () => {
       toolCallResponse('c4', 'read', { file_path: subject, offset: 4, limit: 3 }, 530),
       textWithUsage('ok 4', 540),
     ])
-    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2 } })
+    const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2, contextWindow: 600, safeTokens: 100 } })
     const agent = ctx.agentLoop.create(SessionId('it-valve-prune'), { provider: 'mock', model: 'mock' })
 
     send(agent, 'hello')

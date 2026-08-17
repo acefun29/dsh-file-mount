@@ -120,51 +120,45 @@ describe('foldMounts', () => {
 })
 
 describe('freshnessLevel', () => {
-  it('maps U-score attention decay to display levels', () => {
-    // Tail: born 950, L 1000 -> score ≈ 0.867 -> fresh
-    expect(freshnessLevel(950, 1000)).toBe('fresh')
-    // Head: born 50, L 1000 -> score ≈ 0.867 -> fresh (head zone immortality)
+  const tight = { contextWindow: 800, safeTokens: 100 }
+
+  it('keeps short contexts fresh', () => {
     expect(freshnessLevel(50, 1000)).toBe('fresh')
-    // Near tail: born 800, L 1000 -> p = 0.8 -> score ≈ 0.552 -> ok
-    expect(freshnessLevel(800, 1000)).toBe('ok')
-    // Near threshold: born 750, L 1000 -> p = 0.75 -> score ≈ 0.475 -> warn
-    expect(freshnessLevel(750, 1000)).toBe('warn')
-    // Midpoint: born 500, L 1000 -> p = 0.5 -> score = 0.30 -> expired
-    expect(freshnessLevel(500, 1000)).toBe('expired')
+    expect(freshnessLevel(500, 1000)).toBe('fresh')
     expect(freshnessLevel(undefined, 1000)).toBe('unknown')
     expect(freshnessLevel(500, undefined)).toBe('unknown')
   })
 
-  it('respects the configured threshold', () => {
-    // born 750, L 1000 -> score = 0.475
-    // With threshold = 0.5: score 0.475 < 0.5 -> expired
-    expect(freshnessLevel(750, 1000, 0.5)).toBe('expired')
-    // With threshold = 0.3: score 0.475 >= 0.3, < 0.85 -> ok
-    expect(freshnessLevel(750, 1000, 0.3)).toBe('ok')
+  it('maps pressure × depth to display levels in a filling window', () => {
+    expect(freshnessLevel(680, 700, 0.6, 0, tight)).toBe('fresh')
+    expect(freshnessLevel(50, 700, 0.6, 0, tight)).toBe('expired')
   })
 
-  it('takes segment tokens into account for volume protection', () => {
-    // Midpoint born 500, L 1000 with S = 0 -> score = 0.3 -> expired
-    expect(freshnessLevel(500, 1000, 0.4)).toBe('expired')
-    // Midpoint with giant tokens S = 450 -> score >= 0.40 -> warn or ok
-    expect(freshnessLevel(725, 1000, 0.4, 450)).not.toBe('expired')
+  it('respects the configured threshold', () => {
+    const scoreish = freshnessLevel(50, 700, 0.05, 0, tight)
+    expect(scoreish).not.toBe('expired')
+    expect(freshnessLevel(50, 700, 0.9, 0, tight)).toBe('expired')
+  })
+
+  it('pins expired >= pinAfter as fresh', () => {
+    expect(freshnessLevel(50, 700, 0.6, 0, { ...tight, pinAfter: 2, expired: 2 })).toBe('fresh')
   })
 })
 
 describe('freshness tiers', () => {
-  it('maps each tier id to its threshold (U-score below it counts as expired)', () => {
-    expect(tierOf('lenient')).toBe(0.2)
-    expect(tierOf('standard')).toBe(0.3)
-    expect(tierOf('sensitive')).toBe(0.4)
-    expect(tierOf('aggressive')).toBe(0.5)
+  it('maps each tier id to its threshold (score below it counts as expired)', () => {
+    expect(tierOf('lenient')).toBe(0.45)
+    expect(tierOf('standard')).toBe(0.55)
+    expect(tierOf('sensitive')).toBe(0.65)
+    expect(tierOf('aggressive')).toBe(0.75)
     expect(FRESHNESS_TIERS).toHaveLength(4)
   })
 
   it('picks the nearest tier for an arbitrary threshold', () => {
-    expect(nearestTier(0.2)).toBe('lenient')
-    expect(nearestTier(0.31)).toBe('standard')
-    expect(nearestTier(0.42)).toBe('sensitive')
-    expect(nearestTier(0.49)).toBe('aggressive')
+    expect(nearestTier(0.45)).toBe('lenient')
+    expect(nearestTier(0.56)).toBe('standard')
+    expect(nearestTier(0.66)).toBe('sensitive')
+    expect(nearestTier(0.74)).toBe('aggressive')
     expect(nearestTier(0)).toBe('lenient')
     expect(nearestTier(1)).toBe('aggressive')
   })
@@ -206,7 +200,7 @@ describe('foldMounts freshness', () => {
       contextNode(mountSource({ mounted: [{ start: 1, end: 50, born: 950, expired: 0 }] }), 2),
     ])
     expect(mounts[0]!.contextL).toBe(1000)
-    // born 950 at L 1000 -> score > 0.85 -> fresh.
+    // born 950 at L 1000 is still inside Lsafe (16k) → score 1 → fresh.
     expect(freshnessLevel(950, mounts[0]!.contextL)).toBe('fresh')
   })
 })

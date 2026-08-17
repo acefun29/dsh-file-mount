@@ -39,8 +39,12 @@ One package, two halves: `dsh.bundle.patch` mounts the host plugin row; the `dsh
     maxManagedBytes: 16777216      # files above this are not managed at all
     excludeGlobs: ['**/node_modules/**']  # these paths always pass through
     statsFile: ./dsh-file-mount-stats.json  # optional cross-session totals file
-    freshnessEnabled: true        # freshness (attention decay): on by default
-    freshnessThreshold: 0.4       # U-score below this counts as expired (default 0.4); the Mounted Files panel can change it live (lenient 0.2 / standard 0.3 / sensitive 0.4 / aggressive 0.5 — higher is stricter) — persisted when the host provides a settings service
+    freshnessEnabled: true        # freshness: on by default
+    freshnessThreshold: 0.6       # score below this expires (default 0.6); panel tiers 0.45 / 0.55 / 0.65 / 0.75 (higher = re-send sooner)
+    safeTokens: 16000             # pressure is 0 below this (also capped at 0.25×window)
+    pinAfter: 2                   # pin a segment after this many expiries
+    contextWindow: 128000         # default W when the session has not reported a window
+    # resendBudget: 8000          # optional: skip expiring a segment larger than this
     valveReads: 2                 # re-read safety valve: consecutive full intercepts before native pass-through (0 = disabled)
 
 ## How it works
@@ -53,7 +57,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
 5. Compaction awareness: canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are skipped.
 6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read). The dedup marker tells it to forget then re-read when the mounted content is not in the conversation.
-7. **Freshness (attention decay & U-curve scoring)**: every mounted segment records its context position and token estimate at mount time (last request FULL input tokens — uncached + cacheRead + cacheWrite; DSH usage counts are disjoint, `inputTokens` alone is the uncached portion only — plus the block estimate); segment position in context is scored via a U-shaped attention curve (both head and tail retain high scores via primacy/recency, mid-context attention valley scores lower, large files receive volume protection). **Segments scoring below the threshold leave the ledger** (the next read re-sends them — tokens spent for reliability) and the count is kept: a re-mount inherits expired+1, shown as a badge. **Re-read safety valve**: when the model triggers consecutive full-dedup intercepts on the same file reaching `valveReads` (default 2), native read output passes through and in-window segments are split and refreshed. **The threshold is adjustable live from the panel**: the toolbar offers lenient (0.2) / standard (0.3) / sensitive (0.4) / aggressive (0.5), immediately updating views and persisting via settings.
+7. **Freshness (pressure × depth)**: every mounted segment records its context position and token estimate at mount time (last request FULL input tokens — uncached + cacheRead + cacheWrite; DSH usage counts are disjoint). Short prompts never expire; as the window fills, deeper (older) content scores lower. **Segments scoring below the threshold leave the ledger** (the next read re-sends them); after `pinAfter` expiries the segment stays mounted. **Re-read safety valve** and live panel tiers (0.45 / 0.55 / 0.65 / 0.75) still apply.
 Path identity: absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold).
 
 ## Known limitations

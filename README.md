@@ -39,8 +39,12 @@ npx @deepseek-ai/dsh --profile web
     maxManagedBytes: 16777216      # 超过此大小的文件不接管，原样放行
     excludeGlobs: ['**/node_modules/**']  # 这些路径永远原样放行
     statsFile: ./dsh-file-mount-stats.json  # 可选：跨会话总账落盘路径
-    freshnessEnabled: true        # 新鲜度（注意力衰减）：默认开
-    freshnessThreshold: 0.4       # U 形得分低于此值视为过期（默认 0.4）；「挂载文件」面板可实时调挡（宽松 0.2 / 标准 0.3 / 敏感 0.4 / 激进 0.5，越高越严格），宿主环境提供 settings 服务时改动会持久化
+    freshnessEnabled: true        # 新鲜度：默认开
+    freshnessThreshold: 0.6       # 得分低于此值视为过期（默认 0.6）；面板四挡宽松 0.45 / 标准 0.55 / 敏感 0.65 / 激进 0.75（越高越早重发）
+    safeTokens: 16000             # 短于此时 pressure=0，不会过期（同时不超过 0.25×窗口）
+    pinAfter: 2                   # 过期达到此次数后钉住，不再摘除
+    contextWindow: 128000         # 会话未报告窗口时的默认 W
+    # resendBudget: 8000          # 可选：大于此 token 的段本轮不摘除
     valveReads: 2                 # 重读安全阀：连续拦截达到此次数触发原生透传重读（0=关闭）
 
 ## 工作原理
@@ -53,7 +57,7 @@ npx @deepseek-ai/dsh --profile web
 4. 挂载状态结构化写入注入消息的 source（标准 `user/message` 事件），恢复重放与浏览器折叠共用同一载体、同一套合并规则（`mount-source.ts`）。
 5. 压缩感知：识别 DSH 标准压缩 checkpoint（source `{kind:'plugin', plugin:'compact'}` 的 `sourceEventSeqs`），被 shadow 的挂载消息不再计入账本。
 6. 模型可调用 `file_mount_forget` 工具主动作废某个文件的账（强制重读）。去重 marker 会提示：上文找不到内容时，先 forget 再 read。
-7. **新鲜度（注意力衰减与 U 形评分）**：每个挂载段记录挂载时的上下文位置与 token 估算（最近一轮请求的**全部输入 token——未缓存 + 缓存命中之和**（DSH 的 usage 是 DISJOINT 计数，`inputTokens` 只含未命中缓存部分）+ 注入块估算）；段在上下文中的位置按 U 形注意力曲线计算综合得分（两端头尾因首因/近因效应保留高分，中段注意力塌陷区得分降低，大文件享有体积保护）。**得分低于阈值的段自动摘除账本**（下次 read 重新发送，token 换可靠性），重新挂载时过期次数 +1，UI 显示徽标。**重读安全阀**：当模型对同一文件连续发起全拦截重读达到 `valveReads`（默认 2）次时，触发原生透传放行，同时对窗口内段执行分裂与更新。**阈值可在面板实时调整**：工具栏提供宽松(0.2)/标准(0.3)/敏感(0.4)/激进(0.5)四挡，改动立即影响显示，并在宿主提供 settings 服务时写入 `file-mount` 命名空间（持久化，后续过期判定与挂载消息同步使用新值）。
+7. **新鲜度（压力 × 深度）**：每个挂载段记录挂载时的上下文位置与 token 估算（最近一轮请求的**全部输入 token——未缓存 + 缓存命中 + 缓存写入**，DSH 的 usage 是 DISJOINT 计数）。短上下文不过期；窗口被填满后，越靠前的内容 `depth` 越大、分数越低。**得分低于阈值的段摘除账本**（下次 read 重发），过期次数达到 `pinAfter` 后钉住不再摘。**重读安全阀**与面板四挡（0.45 / 0.55 / 0.65 / 0.75）仍可用。
 路径身份：绝对路径 + `realpath`（软链接统一到真实文件）+ 大小写折叠（按文件系统实测，Windows/Mac 默认折叠）。
 
 ## 已知限制

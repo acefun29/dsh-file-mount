@@ -17,7 +17,7 @@
  * so the fold also derives the current context length — the FULL prompt
  * (uncached input + cacheRead + cacheWrite; DSH counts are disjoint) — and
  * each segment's `born` position then maps to a display level (fresh/ok/warn/
- * expired/unknown) via the threshold the host stamped on the source.
+ * expired/unknown) via pressure × depth against the host-stamped threshold.
  */
 import type { ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
 import type { LedgerSegment } from '../types.ts'
@@ -50,7 +50,7 @@ export interface MountedFileView {
   seq: number
   /** Current context length (latest request input tokens), for freshness. */
   contextL?: number
-  /** Freshness expiry threshold the host configured (default 0.85). */
+  /** Freshness expiry threshold the host configured (default 0.6). */
   freshnessThreshold: number
 }
 
@@ -62,10 +62,10 @@ export type FreshnessLevel = 'fresh' | 'ok' | 'warn' | 'expired' | 'unknown'
  * the threshold counts a segment as expired; higher = more lenient).
  */
 export const FRESHNESS_TIERS = [
-  { id: 'lenient', threshold: 0.2 },
-  { id: 'standard', threshold: 0.3 },
-  { id: 'sensitive', threshold: 0.4 },
-  { id: 'aggressive', threshold: 0.5 },
+  { id: 'lenient', threshold: 0.45 },
+  { id: 'standard', threshold: 0.55 },
+  { id: 'sensitive', threshold: 0.65 },
+  { id: 'aggressive', threshold: 0.75 },
 ] as const
 /** Tier ids, in picker order. */
 export type FreshnessTierId = (typeof FRESHNESS_TIERS)[number]['id']
@@ -97,9 +97,8 @@ export interface FreshnessSettingsApi {
 }
 
 /**
- * Freshness level from the attention-decay drift model: r = (L - born) / L
- * is how far the segment has drifted from the context tail (fresh = tail
- * attention zone, > threshold = pushed past the head zone = expired).
+ * Freshness level from pressure × depth: short prompts stay fresh; deep
+ * (old) content decays as the window fills. Pinned segments score as fresh.
  */
 export function freshnessLevel(
   born: number | undefined,
