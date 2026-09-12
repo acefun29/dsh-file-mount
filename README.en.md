@@ -98,7 +98,7 @@ Path identity: ledger keys are absolute path + `realpath` (symlinks unify to the
 - Increment/dedup/remount replace the result text, so the UI read card degrades to the generic card (the canonical value stays intact).
 - Depends on the read/write/edit canonical value shapes; a shape change trips the guard and passes through natively (pinned by integration tests).
 - Files over `maxManagedBytes` and `excludeGlobs` matches are not managed (no sampling — a sampled fingerprint risks missing a change and falsely deduping).
-- Custom session event types cannot persist safely on rc.6, so the ledger rides structured source fields on standard events.
+- Custom session event types could not persist safely on rc.6, which is why the ledger rides structured source fields on standard events; that carrier still passes the persistence round-trip and resume-replay tests on Session V3.
 - Freshness is heuristic: expiry does not mean the content left the context (only compaction does) — it means attention decayed past usefulness, so re-sending is a deliberate token cost. Sessions without usage data show grey "unknown" and never expire.
 - The browser conversation is a paginated history window (tail page of 50 messages by default; earlier pages load on scroll-up); the dashboard fold accumulates across snapshot revisions, so files whose mount messages scroll out of the window stay listed. Compaction-shadowed mounts are dropped host-side, but the browser has no shadow list — the row persists until the file is next re-mounted.
 - Dashboard "jump to conversation", the cross-session totals UI, and live "file changed" hints are deferred (no browser-side channel).
@@ -127,7 +127,7 @@ To cut a GitHub Release: push a `v*` tag; CI uploads the stable asset `dsh-file-
 
 **Run the tests after every DSH upgrade**: coupling points like the compaction checkpoint shape are pinned by tests (`tests/compaction.spec.ts`), so a DSH shape change fails loudly.
 
-Peers on DSH 0.1.0-rc.5 and later (`@deepseek-ai/dsh-*`, `@deepseek-ai/cordis` ^4, React 18).
+Peers on DSH 0.1.5-rc.1 and later (`@deepseek-ai/dsh-*`, `@deepseek-ai/cordis` ^4.0.2, React 18; adapted to Session V3 and the `snapshotEvents` on-demand read API, pinned by the integration suite).
 
 ## License
 

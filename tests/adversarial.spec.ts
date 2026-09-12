@@ -14,7 +14,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { CallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -27,7 +27,7 @@ function send(agent: Agent, text: string): void {
 
 /** All file-mount injected messages in the log, in order. */
 function mountMessages(agent: Agent) {
-  return agent.session.events
+  return agent.session.snapshotEvents()
     .filter((event) => event.type === 'user/message')
     .map((event) => event.data.source)
     .filter((source) => typeof source === 'object' && source !== null
@@ -41,7 +41,7 @@ function geo(segs: readonly { start: number; end: number }[]): { start: number; 
 
 /** The tool/result content text for one call id. */
 function resultText(agent: Agent, callId: string): string | undefined {
-  const event = agent.session.events.find((e) => e.type === 'tool/result' && e.data.message.content[0]?.toolCallId === CallId(callId))
+  const event = agent.session.snapshotEvents().find((e) => e.type === 'tool/result' && e.data.message.content[0]?.toolCallId === ToolCallId(callId))
   if (event === undefined || event.type !== 'tool/result') return undefined
   const block = event.data.message.content[0]
   if (block === undefined) return undefined
@@ -82,7 +82,7 @@ describe('file-mount adversarial', () => {
       textResponse('third turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('ad-forget'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('ad-forget'), { provider: 'mock', model: 'mock' })
     send(agent, 'do it')
     await waitForIdle(ctx, agent)
     send(agent, 'forget it')
@@ -103,7 +103,7 @@ describe('file-mount adversarial', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('ad-forget-none'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('ad-forget-none'), { provider: 'mock', model: 'mock' })
     send(agent, 'do it')
     await waitForIdle(ctx, agent)
     expect(resultText(agent, 'c1')).toContain('No mount ledger entry to forget')
@@ -122,7 +122,7 @@ describe('file-mount adversarial', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('ad-edit'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('ad-edit'), { provider: 'mock', model: 'mock' })
     agent.ctx.tools.register(defineTool({
       name: 'edit',
       description: 'Test edit stub: applies the change directly on disk.',
@@ -168,7 +168,7 @@ describe('file-mount adversarial', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('ad-write'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('ad-write'), { provider: 'mock', model: 'mock' })
     send(agent, 'do it')
     await waitForIdle(ctx, agent)
 
@@ -186,7 +186,7 @@ describe('file-mount adversarial', () => {
       textResponse('second turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('ad-diff'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('ad-diff'), { provider: 'mock', model: 'mock' })
     send(agent, 'do it')
     await waitForIdle(ctx, agent)
     // External change (no write/edit tool): line 3 replaced.
@@ -208,7 +208,7 @@ describe('file-mount adversarial', () => {
     expect(resultText(agent, 'c2')).toContain('CHANGED')
     expect(resultText(agent, 'c2')).not.toContain(LINE(1))
     // The injected notice is head-only; the changed body rides the tool result.
-    const remount = agent.session.events.find((e) => e.type === 'user/message'
+    const remount = agent.session.snapshotEvents().find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
       && e.data.source['mountKind'] === 'remount')
     const remountText = remount !== undefined && remount.type === 'user/message'
@@ -233,7 +233,7 @@ describe('file-mount adversarial', () => {
       textResponse('fourth turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 0 } })
-    const agent = ctx.agentLoop.create(SessionId('ad-parked'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('ad-parked'), { provider: 'mock', model: 'mock' })
     send(agent, 'do it')
     await waitForIdle(ctx, agent)
     send(agent, 'read again 1')
@@ -263,7 +263,7 @@ describe('file-mount adversarial', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('ad-empty'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('ad-empty'), { provider: 'mock', model: 'mock' })
     send(agent, 'do it')
     await waitForIdle(ctx, agent)
     expect(mountMessages(agent)).toEqual([])
@@ -277,7 +277,7 @@ describe('file-mount adversarial', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('ad-eof'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('ad-eof'), { provider: 'mock', model: 'mock' })
     send(agent, 'do it')
     await waitForIdle(ctx, agent)
     expect(mountMessages(agent)).toEqual([])

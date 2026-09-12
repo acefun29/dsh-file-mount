@@ -28,7 +28,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PostToolDecision, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import type {} from '@deepseek-ai/dsh-session/types'
+import { SessionLogOffset } from '@deepseek-ai/dsh-session/types'
 import { isCompactCheckpoint, shadowedSeqsOf } from './compaction.ts'
 import { diffLines, diffStats, remapSegments } from './diff.ts'
 import { matchesAnyGlob } from './glob.ts'
@@ -911,7 +911,7 @@ export class FileMountService extends Service {
    * stale claims (and enable false dedup).
    */
   private visibleMountRecords(agent: Agent): LedgerRecord[] {
-    const events = agent.session.events
+    const events = agent.session.snapshotEvents()
     const shadowed = shadowedSeqsOf(events)
     return events
       .filter((event) => event.type === 'user/message')
@@ -926,18 +926,18 @@ export class FileMountService extends Service {
    * messages, so a claim never outlives the content it cites.
    */
   private sweep(agent: Agent, store: MountStore): void {
-    const events = agent.session.events
+    const session = agent.session
+    const seq = session.seq
     const cursor = this.cursors.get(agent.id)
-    const start = cursor === undefined || cursor > events.length ? 0 : cursor
-    let dirty = cursor !== undefined && cursor > events.length
+    const start = cursor === undefined || cursor > seq ? 0 : cursor
+    let dirty = cursor !== undefined && cursor > seq
     // One tail pass: detect compaction checkpoints AND track the session's
     // current context length (latest request input tokens) for freshness.
-    for (let i = start; i < events.length; i++) {
-      const event = events[i]
+    for (const event of session.snapshotEvents(SessionLogOffset(start))) {
       if (!dirty && isCompactCheckpoint(event)) dirty = true
       this.trackContextLength(agent.id, event)
     }
-    this.cursors.set(agent.id, events.length)
+    this.cursors.set(agent.id, seq)
     if (dirty) this.refold(agent, store)
     this.reposition(agent, store)
   }
@@ -1018,7 +1018,7 @@ export class FileMountService extends Service {
    * keep it as pos.
    */
   private reposition(agent: Agent, store: MountStore): void {
-    const events = agent.session.events
+    const events = agent.session.snapshotEvents()
     const shadowed = shadowedSeqsOf(events)
     const posBySeq = new Map<number, number>()
     let prefix = 0
@@ -1114,7 +1114,7 @@ export class FileMountService extends Service {
         // (the next reads simply re-anchor). Never let restore crash the host.
       }
       this.stores.set(agent.id, store)
-      this.cursors.set(agent.id, agent.session.events.length)
+      this.cursors.set(agent.id, agent.session.seq)
       this.reposition(agent, store)
       this.resyncPins(agent.id, store)
     })().finally(() => { this.restores.delete(agent.id) })

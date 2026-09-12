@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId, createUserMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createUserMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import SessionStore from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -46,7 +46,7 @@ function send(agent: Agent, text: string): void {
 
 /** All file-mount injected messages in the log, in order. */
 function mountMessages(agent: Agent) {
-  return agent.session.events
+  return agent.session.snapshotEvents()
     .filter((event) => event.type === 'user/message')
     .map((event) => event.data.source)
     .filter((source) => typeof source === 'object' && source !== null
@@ -59,7 +59,7 @@ function geo(segs: readonly { start: number; end: number }[]): { start: number; 
 }
 /** The tool/result content text for one call id. */
 function resultText(agent: Agent, callId: string): string | undefined {
-  const event = agent.session.events.find((e) => e.type === 'tool/result' && e.data.message.content[0]?.toolCallId === CallId(callId))
+  const event = agent.session.snapshotEvents().find((e) => e.type === 'tool/result' && e.data.message.content[0]?.toolCallId === ToolCallId(callId))
   if (event === undefined || event.type !== 'tool/result') return undefined
   const block = event.data.message.content[0]
   if (block === undefined) return undefined
@@ -90,7 +90,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 0 } })
-    const agent = ctx.agentLoop.create(SessionId('it-anchor'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-anchor'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
@@ -119,7 +119,7 @@ describe('file-mount integration', () => {
     expect(resultText(agent, 'c2')).not.toContain(dir.replace(/\\/g, '/'))
 
     // The dedup decision also leaves a short note message in the log.
-    const dedupNote = agent.session.events.find((e) => e.type === 'user/message'
+    const dedupNote = agent.session.snapshotEvents().find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
       && e.data.source['mountKind'] === 'dedup')
     expect(dedupNote !== undefined && dedupNote.type === 'user/message'
@@ -133,7 +133,7 @@ describe('file-mount integration', () => {
     expect(resultText(agent, 'c3')).not.toContain('<content>')
 
     // The injected increment message is a ledger declaration, not the body.
-    const increment = agent.session.events.find((e) => e.type === 'user/message'
+    const increment = agent.session.snapshotEvents().find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
       && e.data.source['mountKind'] === 'increment')
     const incrementText = increment !== undefined && increment.type === 'user/message'
@@ -165,7 +165,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 0 } })
-    const agent = ctx.agentLoop.create(
+    const agent = await ctx.agentLoop.create(
       SessionId('it-rel-path'),
       { provider: 'mock', model: 'mock' },
       { cwd: dir },
@@ -189,13 +189,13 @@ describe('file-mount integration', () => {
       textResponse('third turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 0 } })
-    const agent = ctx.agentLoop.create(SessionId('it-cancel-increment'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-cancel-increment'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
     const off = ctx.on('session/event', (session, event) => {
       if (session !== agent.session) return
-      if (event.type === 'tool/result' && event.data.message.content[0]?.toolCallId === CallId('c2')) {
+      if (event.type === 'tool/result' && event.data.message.content[0]?.toolCallId === ToolCallId('c2')) {
         agent.cancel({ kind: 'user' })
       }
     })
@@ -220,7 +220,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 12 } })
-    const agent = ctx.agentLoop.create(SessionId('it-threshold'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-threshold'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
@@ -237,7 +237,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 16 } })
-    const agent = ctx.agentLoop.create(SessionId('it-increment-floor'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-increment-floor'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
@@ -256,7 +256,7 @@ describe('file-mount integration', () => {
       textResponse('second turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('it-remount'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-remount'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
     await writeFile(file, ['x', 'y', 'z'].join('\n') + '\n', 'utf8')
@@ -284,7 +284,7 @@ describe('file-mount integration', () => {
       textResponse('second turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('it-incremental'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-incremental'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
@@ -309,7 +309,7 @@ describe('file-mount integration', () => {
     expect(resultText(agent, 'c2')).toContain('--- L3 ---')
     expect(resultText(agent, 'c2')).toContain('CHANGED')
 
-    const remount = agent.session.events.find((e) => e.type === 'user/message'
+    const remount = agent.session.snapshotEvents().find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
       && e.data.source['mountKind'] === 'remount')
     const remountText = remount !== undefined && remount.type === 'user/message'
@@ -335,7 +335,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { minSavedTokens: 0 } })
-    const agent = ctx.agentLoop.create(SessionId('it-replay'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-replay'), { provider: 'mock', model: 'mock' })
 
     // Seed the resumed log with a mount message for L1-2 (standard event type).
     const seed = createUserMessage({
@@ -368,18 +368,21 @@ describe('file-mount integration', () => {
     const adapter = new MockAdapter([
       toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }, 50_000),
       textWithUsage('first turn done', 50_000),
-      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 400),
-      textWithUsage('second turn done', 400),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 4_000),
+      textWithUsage('second turn done', 4_000),
     ])
-    const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 600, safeTokens: 100 } })
-    const agent = ctx.agentLoop.create(SessionId('it-seq-compact'), { provider: 'mock', model: 'mock' })
+    // Session V3 persists the system prompt as a message event, so the
+    // no-visible-usage prefix fallback starts at the system prompt's estimate
+    // (~450 tokens here) instead of ~0; keep L comfortably above that floor.
+    const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 6_000, safeTokens: 1_000 } })
+    const agent = await ctx.agentLoop.create(SessionId('it-seq-compact'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
-    const mountEvent = agent.session.events.find((event) => event.type === 'user/message'
+    const mountEvent = agent.session.snapshotEvents().find((event) => event.type === 'user/message'
       && (event.data.source as unknown as Record<string, unknown> | null)?.['plugin'] === 'file-mount')
     expect(mountEvent).toBeDefined()
-    const highUsage = agent.session.events.filter((event) => {
+    const highUsage = agent.session.snapshotEvents().filter((event) => {
       if (event.type !== 'assistant/message') return false
       const usage = event.data.usage
       const input = usage && typeof usage === 'object' ? (usage as { inputTokens?: number }).inputTokens : undefined
@@ -405,7 +408,7 @@ describe('file-mount integration', () => {
     const line = (n: string) => n + 'x'.repeat(39)
     await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
     const noUsageTool = (id: string, args: object): StreamChunk[] => {
-      const callId = CallId(id)
+      const callId = ToolCallId(id)
       const argumentsJson = JSON.stringify(args)
       return [
         { type: 'block-start', index: 0, blockType: 'tool-call' },
@@ -429,7 +432,7 @@ describe('file-mount integration', () => {
       noUsageText('second turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 600, safeTokens: 100 } })
-    const agent = ctx.agentLoop.create(SessionId('it-seq-nousage'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-seq-nousage'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
     send(agent, padding)
@@ -448,12 +451,12 @@ describe('file-mount integration', () => {
       textResponse('second turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('it-compact-live'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-compact-live'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
     // The anchor's state message is now shadowed by a compaction checkpoint.
-    const mountEvent = agent.session.events.find((event) => event.type === 'user/message'
+    const mountEvent = agent.session.snapshotEvents().find((event) => event.type === 'user/message'
       && (event.data.source as unknown as Record<string, unknown> | null)?.['plugin'] === 'file-mount')
     expect(mountEvent).toBeDefined()
     agent.session.append('user/message', createUserMessage({
@@ -476,7 +479,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('it-compact-replay'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-compact-replay'), { provider: 'mock', model: 'mock' })
 
     // Seed a resumed-style mount message, then a checkpoint that shadows it.
     const seed = createUserMessage({
@@ -515,7 +518,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ]), { cwd: dir })
     await ctx1.plugin(JsonlSessionPersistence, { root })
-    const agent1 = ctx1.agentLoop.create(sessionId, { provider: 'mock', model: 'mock' })
+    const agent1 = await ctx1.agentLoop.create(sessionId, { provider: 'mock', model: 'mock' })
     send(agent1, 'read it')
     await waitForIdle(ctx1, agent1)
     await ctx1.fiber.dispose()
@@ -524,7 +527,8 @@ describe('file-mount integration', () => {
     const ctx2 = new Context()
     await ctx2.plugin(SessionStore)
     await ctx2.plugin(JsonlSessionPersistence, { root })
-    const inspection = await ctx2.sessionPersistence.load(sessionId)
+    const handle = await ctx2.sessionPersistence.open(sessionId, 'read')
+    const inspection = await handle.read()
     const mountEvents = inspection.events.filter((event) => event.type === 'user/message'
       && typeof event.data.source === 'object' && event.data.source !== null
       && event.data.source['plugin'] === 'file-mount')
@@ -548,7 +552,7 @@ describe('file-mount integration', () => {
       textResponse('second turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('it-append'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-append'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
     await writeFile(subject, ['1', '2', '3', '4', '5', '6'].map(line).join('\n') + '\n', 'utf8')
@@ -577,7 +581,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 0 } })
-    const agent = ctx.agentLoop.create(SessionId('it-dedup-merge'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-dedup-merge'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
@@ -602,7 +606,7 @@ describe('file-mount integration', () => {
       textResponse('second turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('it-write-known'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-write-known'), { provider: 'mock', model: 'mock' })
     send(agent, 'write it')
     await waitForIdle(ctx, agent)
 
@@ -626,7 +630,7 @@ describe('file-mount integration', () => {
       textResponse('second turn done'),
     ])
     const ctx = await harness(adapter, { cwd: dir })
-    const agent = ctx.agentLoop.create(SessionId('it-forget'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-forget'), { provider: 'mock', model: 'mock' })
     send(agent, 'read then forget')
     await waitForIdle(ctx, agent)
 
@@ -648,7 +652,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { excludeGlobs: ['**/vendor/**'] } })
-    const agent = ctx.agentLoop.create(SessionId('it-exclude'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-exclude'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 
@@ -669,7 +673,7 @@ describe('file-mount integration', () => {
       textResponse('done'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { statsFile: statsPath } })
-    const agent = ctx.agentLoop.create(SessionId('it-stats'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-stats'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
     await ctx.fiber.dispose()
@@ -695,7 +699,7 @@ describe('file-mount integration', () => {
       textWithUsage('done', 850),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 600, safeTokens: 100 } })
-    const agent = ctx.agentLoop.create(SessionId('it-freshness'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-freshness'), { provider: 'mock', model: 'mock' })
     send(agent, 'hello')
     await waitForIdle(ctx, agent)
     send(agent, 'read it')
@@ -738,7 +742,7 @@ describe('file-mount integration', () => {
       textWithUsageCached('done', 500, 2000),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 4000, safeTokens: 100 } })
-    const agent = ctx.agentLoop.create(SessionId('it-clock-cached'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-clock-cached'), { provider: 'mock', model: 'mock' })
     send(agent, 'hello')
     await waitForIdle(ctx, agent)
     send(agent, 'read it')
@@ -781,7 +785,7 @@ describe('file-mount integration', () => {
       textResponse('turn 4 ok'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2 } })
-    const agent = ctx.agentLoop.create(SessionId('it-safety-valve'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-safety-valve'), { provider: 'mock', model: 'mock' })
 
     send(agent, 'read 1')
     await waitForIdle(ctx, agent)
@@ -829,7 +833,7 @@ describe('file-mount integration', () => {
       textResponse('ok 3'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2 } })
-    const agent = ctx.agentLoop.create(SessionId('it-valve-split'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-valve-split'), { provider: 'mock', model: 'mock' })
 
     send(agent, 'read all')
     await waitForIdle(ctx, agent)
@@ -872,7 +876,7 @@ describe('file-mount integration', () => {
       textResponse('ok 4'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2, minSavedTokens: 12 } })
-    const agent = ctx.agentLoop.create(SessionId('it-valve-threshold'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-valve-threshold'), { provider: 'mock', model: 'mock' })
 
     send(agent, 'read 1')
     await waitForIdle(ctx, agent)
@@ -910,7 +914,7 @@ describe('file-mount integration', () => {
       textResponse('ok 4'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 3 } })
-    const agent = ctx.agentLoop.create(SessionId('it-valve-parked'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-valve-parked'), { provider: 'mock', model: 'mock' })
 
     send(agent, 'read 1')
     await waitForIdle(ctx, agent)
@@ -948,7 +952,7 @@ describe('file-mount integration', () => {
       textWithUsage('ok 4', 540),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 2, contextWindow: 600, safeTokens: 100 } })
-    const agent = ctx.agentLoop.create(SessionId('it-valve-prune'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-valve-prune'), { provider: 'mock', model: 'mock' })
 
     send(agent, 'hello')
     await waitForIdle(ctx, agent)
@@ -986,7 +990,7 @@ describe('file-mount integration', () => {
       textResponse('ok 4'),
     ])
     const ctx = await harness(adapter, { cwd: dir, config: { valveReads: 0 } })
-    const agent = ctx.agentLoop.create(SessionId('it-valve-disabled'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-valve-disabled'), { provider: 'mock', model: 'mock' })
 
     send(agent, 'read 1')
     await waitForIdle(ctx, agent)
@@ -1019,7 +1023,7 @@ describe('file-mount integration', () => {
       if (exec.name !== 'read' || result.isError || downstream.kind !== 'accept') return downstream
       return { kind: 'accept' as const, value: { replaced: true, path: subject } }
     })
-    const agent = ctx.agentLoop.create(SessionId('it-downstream-value'), { provider: 'mock', model: 'mock' })
+    const agent = await ctx.agentLoop.create(SessionId('it-downstream-value'), { provider: 'mock', model: 'mock' })
     send(agent, 'read it')
     await waitForIdle(ctx, agent)
 

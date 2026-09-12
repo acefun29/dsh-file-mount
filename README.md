@@ -98,7 +98,7 @@ npx --yes @deepseek-ai/dsh plugin --profile web add "file:$Tgz"
 - 增量 / 去重 / 重挂载替换了结果文本，UI 的 read 卡片降级为通用卡片（canonical value 完整保留）。
 - 依赖 read / write / edit 工具 canonical value 的结构；结构变化时守卫失效并原生透传（集成测试锁定）。
 - 超过 `maxManagedBytes` 的文件与 `excludeGlobs` 命中的路径不接管，原样放行（不做抽检：抽检有「改了没看出来」的风险）。
-- 自定义会话事件类型在 rc.6 无法安全持久化，故账本载体选用标准事件上的结构化 source。
+- 自定义会话事件类型在 rc.6 无法安全持久化，是账本载体选用标准事件上结构化 source 的历史原因；Session V3 下该载体经持久化往返与恢复重放测试验证仍然成立。
 - 新鲜度是启发式：段过期不代表内容被移出上下文（只有压缩才会），而是「注意力已衰减、模型基本看不见」，故过期重发是故意的 token 开销；无 usage 数据的会话（如某些适配器）显示灰色「未知」，不判过期。
 - 浏览器会话是分页历史窗口（默认尾页 50 条消息，上滚聊天才加载更早），仪表盘折叠跨快照累积，挂载消息滚出窗口后文件行仍保留；被压缩 shadow 的旧挂载在宿主侧已摘账，但浏览器端看不到 shadow 清单，行会保留到下一次该文件重挂。
 - 仪表盘「点行跳回聊天」、跨会话总账的界面展示、「文件已变」实时提示暂缓（浏览器端没有对应通道）。
@@ -127,7 +127,7 @@ pnpm dsh:install # 打 tarball 并装进本机 web profile（Windows 可用）
 
 **升级 DSH 后先跑一遍测试**：压缩 checkpoint 的标记形状等耦合点由测试钉死（`tests/compaction.spec.ts`），DSH 改形状时测试会立刻报警。
 
-依赖 DSH 0.1.0-rc.5 及以上（peer 依赖 `@deepseek-ai/dsh-*`、`@deepseek-ai/cordis` ^4、React 18）。
+依赖 DSH 0.1.5-rc.1 及以上（peer 依赖 `@deepseek-ai/dsh-*`、`@deepseek-ai/cordis` ^4.0.2、React 18；适配 Session V3 与 `snapshotEvents` 按需读取 API，兼容性由集成测试锁定）。
 
 ## License
 
