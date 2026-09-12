@@ -4,40 +4,56 @@
   <img src="logo.png" alt="dsh-file-mount" width="420">
 </p>
 
-A DeepSeek Harness plugin: **incremental file mounting with read dedupe**. It records which line ranges of each file are already in the model context, re-reads only add the missing parts, on-disk changes re-send only the changed lines (line-level diff), and a Mounted Files dashboard shows the live ledger.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.1.5--rc.1-4c6ef5.svg" alt="DSH 0.1.5-rc.1 or later">
+  <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg" alt="Node ^22.19 or >=24">
+</p>
+
+A DeepSeek Harness plugin: **incremental file mounting with read dedupe**. It records which line ranges of each file already entered the model context, so re-reads only add what is missing, on-disk changes re-send only the changed lines (line-level diff), and a Mounted Files dashboard shows the live ledger.
 
 Ported from [piwpi](https://github.com/earendil-works/pi-mono)'s context-mount mechanism.
 
-## What it does
+## Why
 
-- **Model side**: already-mounted ranges are never re-sent (dedup marker); missing or changed lines ride the durable tool result (increment / remount), and the plugin notice is a ledger declaration only; file edits re-send only the changed lines (append-only logs only re-send the new tail); files the AI just wrote are mounted as already known and read for free; a `file_mount_forget` tool lets the model force a fresh re-read.
-- **UI side**: the Mounted Files tab is a dashboard; opening it stays at the **top**, with **net savings and path search pinned** while the file list scrolls; each file row expands into its **segments**, each with a **freshness bar** (green=fresh / yellow=aging / orange=stale / red=expired / grey=unknown) and an **expired-count**; plus a **coverage map** (filled spans show which lines are already in context), search, sorting, and the net-savings/CNY header; remounted rows carry a "remounted" mark.
-- **Savings accounting**: CJK characters count as 1 token each, other characters as chars ÷ 4; both saved tokens and the plugin's own note overhead are tracked, and the UI shows the NET figure (floored at 0); optional cross-session totals persist to a `statsFile`.
+Agents re-read the same files constantly: glance at an implementation, change two lines, read it again; or read the same file through a different window. Every pass costs full tokens even though the model **just saw** most of that text.
+
+This plugin keeps a ledger of what has been read. From the second read onward, only genuinely missing or changed lines enter the context — the rest collapses into a one-line dedupe notice. You save context, and you save money.
+
+## What you get
+
+![Mounted Files dashboard](docs/mounted-files.png)
+
+- **Model side**: already-mounted ranges are never re-sent (dedupe marker); missing or changed lines ride the durable tool result (increment / remount) while the notice is a ledger declaration only; edits re-send only the changed lines (append-only logs only re-send the new tail); files the AI just wrote are mounted as already known and read for free; a `file_mount_forget` tool lets the model force a fresh re-read.
+- **UI side**: the Mounted Files tab is a dashboard; opening it stays at the **top**, with **net savings and path search pinned** while the file list scrolls. Each file row expands into its **segments**, each with a **freshness bar** (green = fresh / yellow = aging / orange = near expiry / red = expired / grey = unknown) and an **expiry count**; plus a **coverage map** (filled spans show where the mounted lines sit in the file), search, sorting, and the net-savings / CNY figures. Context injection rows in the conversation carry a marker when the file changed.
+- **Savings accounting**: CJK characters count as 1 token each, other characters as chars ÷ 4. Both the saved tokens and the plugin's own note overhead are tracked, and the UI shows the **net** figure (floored at 0); optional cross-session totals persist to a `statsFile`.
 
 ## Install
 
-One package, two halves: `dsh.bundle.patch` mounts the host plugin row; the `dsh.client` manifest lets the web scanner pick up the browser half. After install, **restart the harness** (a page refresh is not enough). You need **pnpm** on PATH (`dsh plugin` forwards to it) and Node `^22.19 || >=24`.
+One package, two halves: `dsh.bundle.patch` mounts the host plugin row, and the `dsh.client` manifest lets the web scanner pick up the browser half. After installing, **restart the harness** (a page refresh is not enough). You need **pnpm** on PATH (`dsh plugin` forwards to it) and Node `^22.19 || >=24`.
 
-### 1. GitHub Release (recommended)
+### Quick start (recommended)
 
 ```sh
 npx --yes @deepseek-ai/dsh plugin --profile web add https://github.com/acefun29/dsh-file-mount/releases/latest/download/dsh-file-mount.tgz
 npx --yes @deepseek-ai/dsh --profile web
 ```
 
-If `dsh` is on PATH, the first line is `dsh plugin --profile web add https://github.com/acefun29/dsh-file-mount/releases/latest/download/dsh-file-mount.tgz`. This is a prebuilt tarball: no npm, no `allowBuilds`.
+With a global `dsh`, replace the first line with `dsh plugin --profile web add <the same URL>`. This is a prebuilt tarball: no npm, no `allowBuilds`.
 
-If `npx @deepseek-ai/dsh` prints nothing for a long time, it is fetching the CLI — wait it out, or use a dsh that already booted once (`~/.dsh/profiles/node_modules/@deepseek-ai/dsh`).
+If `npx @deepseek-ai/dsh` prints nothing for a long time, it is fetching the CLI (the first run downloads the whole dependency tree) — just wait it out.
 
-### 2. From this checkout
+### From this checkout
 
 ```sh
 pnpm dsh:install
 ```
 
-The installer packs a tarball and adds `file:E:/...tgz`. Do not `dsh plugin add .` or `file:E:\...` on Windows — pnpm joins the drive letter onto the profile directory, so the plugin installs but never activates.
+The installer builds, packs a tarball, and adds it as `file:E:/...tgz`.
 
-### 3. Local tarball
+> **Windows note**: never `dsh plugin add .` or `file:E:\...` (backslashes) for a directory. pnpm joins the drive letter onto the profile directory (`profile\E:\...`), so the plugin installs but never activates. The installer already handles this.
+
+### Manual local tarball
 
 ```sh
 pnpm run build
@@ -54,80 +70,102 @@ $Tgz = ((Get-Location).Path -replace '\\','/') + "/dsh-file-mount-$((Get-Content
 npx --yes @deepseek-ai/dsh plugin --profile web add "file:$Tgz"
 ```
 
-Do not install with `github:acefun29/dsh-file-mount`: the git tree has no `lib/`, and this package has no `prepare` script. Use the Release tarball or the installer above.
-
-Then start with `npx @deepseek-ai/dsh --profile web`.
+Do not install from git (`github:acefun29/dsh-file-mount`): the tree ships no `lib/`, and the package has no `prepare` script. Use the Release tarball or the installer above.
 
 ## Config
+
+Put a `config` block on the plugin row in your profile:
 
 ```yaml
 - id: file-mount
   name: dsh-file-mount
   config:
-    enabled: true            # master switch; off keeps every read native
-    capacity: 32             # file identity cache capacity (mounted files are pinned)
-    ttlMs: 300000            # safety valve: force re-read after this interval
-    maxPinnedFiles: 256      # max mounted files pinned per session
-    minSavedTokens: 16       # dedup/increment below this net saving passes through natively without writing the ledger (and does not count toward the safety valve)
-    maxFingerprintBytes: 1000000   # files above this keep no line draft (whole remount)
-    maxManagedBytes: 16777216      # files above this are not managed at all
-    excludeGlobs: ['**/node_modules/**']  # these paths always pass through
-    statsFile: ./dsh-file-mount-stats.json  # optional cross-session totals file
-    freshnessEnabled: true        # freshness: on by default
-    pinAfter: 1                   # pin after one expiry — a segment is re-sent at most once
-    contextWindow: 128000         # default W when the session has not reported a window
-    # resendBudget: 8000          # optional: skip expiring a segment larger than this
-    valveReads: 2                 # re-read safety valve: consecutive full intercepts before native pass-through (0 = disabled)
+    excludeGlobs: ['**/node_modules/**']
+    statsFile: ./dsh-file-mount-stats.json
+```
+
+Every key, with its default:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Master switch; off keeps every read native |
+| `capacity` | `32` | File identity cache capacity (mounted files are pinned and exempt) |
+| `ttlMs` | `300000` | Cache safety valve: forced re-read interval when a stat looks unchanged |
+| `maxPinnedFiles` | `256` | Max mounted files pinned per session |
+| `minSavedTokens` | `16` | Dedup/increment below this net saving passes through natively without writing the ledger (and does not count toward the safety valve) |
+| `maxFingerprintBytes` | `1000000` | Files above this keep no line draft (whole-window remount on change) |
+| `maxManagedBytes` | `16777216` | Files above this are not managed at all |
+| `excludeGlobs` | `[]` | Matching paths always pass through |
+| `statsFile` | none | Optional cross-session totals file |
+| `freshnessEnabled` | `true` | Freshness tracking master switch |
+| `freshnessThreshold` | `0.6` | Freshness score below which a segment counts as expired |
+| `safeRatio` | `0.95` | Pressure-free window ratio (`Lsafe = safeRatio × W`) |
+| `safeTokens` | none | Absolute `Lsafe`; takes precedence over `safeRatio` |
+| `pinAfter` | `1` | Expiries after which a segment is pinned (pinned segments are never pruned) |
+| `contextWindow` | `128000` | Default window `W` when the session reports none |
+| `resendBudget` | none | Segments larger than this many tokens are not expired |
+| `valveReads` | `2` | Re-read safety valve: consecutive full intercepts before a native pass-through (`0` = disabled) |
 
 ## How it works
 
 The plugin sits on the `tools/post-execute` interception point, dispatched by tool name:
 
-1. **read**: derives the window from the canonical value; a stat-verified cache (mtime+size fast path + sha256) confirms identity; then: full coverage replaces the result with a dedup marker (only the FIRST dedup note per file between real messages — repeats are silent and their savings merge into the next message); partial coverage and hash-change remounts put the missing/changed **body on the durable tool result** (each line prefixed with `N: ` like native read; so `cancel` clearing the inbox can drop only the ledger notice — next read treats it as unmounted) and a head-only ledger notice on `additionalContexts`; a hash change diffs the stored line draft and re-sends only the changed lines (unchanged lines just shift; unique-line anchors split an oversized LCS middle), falling back to a whole-window remount without a draft or for huge diffs. The first `new` mount still keeps the native read body plus a head-only notice.
-2. **write**: the whole file is mounted as already known (free re-reads); the cache identity is invalidated.
-3. **edit**: marks the cache identity stale but keeps the line-fingerprint draft; the next read re-reads disk and remounts only the changed lines.
+1. **read**: derives the window from the canonical value (path/offset/lines/totalLines); a stat-verified cache (mtime+size fast path + sha256) confirms the on-disk identity; then it takes one of three branches. Full coverage replaces the result with a dedupe marker (only the FIRST dedupe notice per file between two real messages — repeats are silent and their savings merge into the next message). Partial coverage or a hash change puts the missing/changed **lines into the durable tool result** (each line prefixed with `N: ` like native read, so `cancel` clearing the inbox can at worst drop the ledger notice — the next read treats the file as unmounted), leaving a head-only ledger notice on `additionalContexts`; on a hash change the stored line draft is diffed and only the changed lines are re-sent (unchanged lines just shift; a unique-line anchor splits an oversized LCS middle), falling back to a whole-window remount without a draft or for huge diffs. The first mount still keeps the native read body plus a head-only notice.
+2. **write**: the whole file is mounted as already known (free re-reads); the cached identity is invalidated.
+3. **edit**: marks the cached identity stale but keeps the line-fingerprint draft; the next read re-reads disk and remounts only the changed lines.
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
-5. Compaction awareness: canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are skipped.
-6. The model can call `file_mount_forget` to invalidate a file's ledger entry (forced re-read). The dedup marker tells it to forget then re-read when the mounted content is not in the conversation.
-7. **Freshness**: each mounted segment records its carrier message `seq`; the plugin uses that position in the live context to decide whether a range is still worth deduping. Near the window cap, deeper content may leave the ledger and be re-sent on the next read; after one expiry the segment is pinned. Compaction is what actually removes content from the context. A re-read safety valve still applies. Freshness is not adjustable from the dashboard.
-Path identity: ledger keys are absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold). Marker heads shown to the model use a path relative to the workspace cwd (forward slashes); cwd comes from the session `header.cwd`, else `dsh-fs-local`'s `cwd`.
+5. Compaction awareness: DSH's canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are then skipped.
+6. The model can call `file_mount_forget` to invalidate one file's ledger entry (forced re-read). The dedupe marker tells it to forget-then-read when the mounted content is not in the conversation above.
+7. **Freshness**: each mounted segment records the `seq` of the message carrying it, and that position in the live context decides whether the range is still worth deduping. Near the window cap, deeper content may leave the ledger and be re-sent on the next read; after one expiry the segment is pinned. Only compaction actually removes content from the context. A re-read safety valve still applies. Freshness is not adjustable from the dashboard.
+
+**Path identity**: ledger keys are absolute path + `realpath` (symlinks unify to the real file) + case folding (probed per filesystem; Windows and default macOS fold). Marker heads shown to the model use a path relative to the workspace cwd (forward slashes); the cwd comes from the session `header.cwd`, else `dsh-fs-local`'s `cwd`.
+
+## Compatibility
+
+| Plugin | DSH |
+| --- | --- |
+| `0.5.1` | `0.1.5-rc.1` or later (verified on `0.1.5-rc.2`) |
+| `≤0.5.0` | DSH from the `0.1.0-rc.5` line; no longer valid once `Session.events` was removed (0.1.2-alpha.4) |
+
+The plugin connects to contracts on both sides: the host's `tools/post-execute` interception point and the read/write/edit canonical values, plus the browser's slots (`conversation.view`) and session snapshot layout.
+
+**Run the tests after every DSH upgrade.** Coupling points — the compaction checkpoint shape, the tool-result shape, the client snapshot layout — are pinned by tests (`pnpm test`), so a shape change fails loudly. Semantic changes that keep the same names (the kind that left a blank dashboard until it was actually exercised in a browser) are only caught by running it for real.
 
 ## Known limitations
 
-- Compaction voids the mounted guarantee: shadowed mounts are skipped and re-anchor on the next read.
-- Increment/dedup/remount replace the result text, so the UI read card degrades to the generic card (the canonical value stays intact).
-- Depends on the read/write/edit canonical value shapes; a shape change trips the guard and passes through natively (pinned by integration tests).
+- Compaction invalidates the "already mounted" guarantee: the mounted content leaves the model context, and the plugin identifies it through the checkpoint's `sourceEventSeqs` and skips it, re-anchoring on the next read.
+- Increment / dedupe / remount replace the result text, so the UI read card degrades to the generic card (the canonical value stays intact).
+- Depends on the read / write / edit canonical value shapes; a shape change trips the guard and passes through natively (pinned by integration tests).
 - Files over `maxManagedBytes` and `excludeGlobs` matches are not managed (no sampling — a sampled fingerprint risks missing a change and falsely deduping).
-- Custom session event types could not persist safely on rc.6, which is why the ledger rides structured source fields on standard events; that carrier still passes the persistence round-trip and resume-replay tests on Session V3.
 - Freshness is heuristic: expiry does not mean the content left the context (only compaction does) — it means attention decayed past usefulness, so re-sending is a deliberate token cost. Sessions without usage data show grey "unknown" and never expire.
-- The browser conversation is a paginated history window (tail page of 50 messages by default; earlier pages load on scroll-up); the dashboard fold accumulates across snapshot revisions, so files whose mount messages scroll out of the window stay listed. Compaction-shadowed mounts are dropped host-side, but the browser has no shadow list — the row persists until the file is next re-mounted.
-- Dashboard "jump to conversation", the cross-session totals UI, and live "file changed" hints are deferred (no browser-side channel).
+- The browser conversation is a paginated history window (tail page of 50 messages by default; earlier pages load on scroll-up). The dashboard fold accumulates across snapshot revisions, so files whose mount messages scroll out of the window stay listed. Compaction-shadowed mounts are dropped host-side, but the browser has no shadow list — the row persists until the file is next re-mounted.
+
+### Deferred / next steps
+
+- Dashboard "jump to conversation", the cross-session totals UI, and live "file changed" hints were deferred because the browser side had no channel for them. Since DSH 0.1.5 plugins can register global panels through `sidebar.panellist` / `main`, a cross-session view may be within reach.
+- Custom session event types could not persist safely on rc.6 — the historical reason the ledger rides structured source fields on standard events. That carrier still passes the persistence round-trip and resume-replay tests on Session V3.
 
 ## FAQ
 
-- **Why does the read card degrade to a generic card?** The plugin replaces the model-visible result text (dedup marker / increment or remount body) at post-execute; the canonical value stays intact, but the card renders from the result text.
-- **How do I keep the plugin away from some files?** `excludeGlobs` for paths (e.g. `**/node_modules/**`), `maxManagedBytes` for the size cap; excluded/huge files pass through untouched.
-- **How accurate are the numbers?** Estimates: CJK char ≈ 1 token, others 4 chars ≈ 1 token; the UI shows net (saved − note overhead, floored at 0) and a rough CNY figure (¥1 per million tokens).
-- **Can the model force a re-read?** Call `file_mount_forget` to invalidate a file's ledger entry. The dedup marker also says: if the content is not in the conversation above, forget then read again.
-- **Where are cross-session totals?** Configure `statsFile`; totals accumulate there and are readable via `fileMount.stats()`. The UI display is deferred.
-- **`npx @deepseek-ai/dsh plugin add …` prints nothing?** npx is fetching the full CLI and can sit for minutes. Install from the GitHub Release `dsh-file-mount.tgz` URL; from this repo use `pnpm dsh:install`. On Windows do not `add .` — use `file:E:/...tgz` (forward slashes).
-- **Installed but no Mounted Files tab?** A Windows directory install junctions to the wrong path, so the package never joins `dsh.profile.bundles`. Reinstall from the Release tarball or `pnpm dsh:install` and restart the harness.
+- **Why does the read card in the UI become a generic card?** The plugin replaces the model-visible result text at post-execute (dedupe marker / increment or remount body). The canonical value is preserved, but the card renders from the result text, so it degrades to the generic card.
+- **How do I keep the plugin away from some files?** Use `excludeGlobs` for a denylist (e.g. `**/node_modules/**`) and `maxManagedBytes` for a size ceiling; anything outside the list or over the ceiling passes through natively.
+- **Are the savings numbers accurate?** They are estimates: CJK 1 char ≈ 1 token, everything else 4 chars ≈ 1 token. The UI shows the net figure (saved − spent, floored at 0) and a rough CNY conversion at ≈ ¥1 per million tokens.
+- **How does the model force a re-read?** It calls `file_mount_forget` to invalidate that file's ledger entry, so the next read re-sends the whole file. The dedupe result says the same thing: forget first, then read, when the content is not in the conversation above.
+- **Where do cross-session totals live?** Configure `statsFile` and totals accumulate there; read them through `fileMount.stats()` (the UI for this is deferred).
+- **Installed, but there is no Mounted Files tab?** A directory install on Windows links to the wrong path and the plugin never reaches `dsh.profile.bundles`. Use the Release tarball or `pnpm dsh:install`, then restart the harness.
+- **`npx @deepseek-ai/dsh plugin add …` hangs with no output?** npx is downloading the full CLI package, which can take minutes. For installs use the GitHub Release `dsh-file-mount.tgz` URL; for development in this repo use `pnpm dsh:install`.
 
 ## Development
 
 ```sh
 pnpm install
-pnpm test        # vitest: unit + real read/write loop integration + persistence + compaction + freshness + client components
+pnpm test        # vitest (194 cases: units + real read/write loop integration + persistence round trip + compaction awareness + freshness + client components + install contract)
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown (lib/index.js / lib/client.js)
-pnpm dsh:install # pack a tarball and install into the local web profile (works on Windows)
+pnpm dsh:install # pack a tarball into the local web profile (works on Windows; rebuilds when src is newer than the artifacts)
 ```
 
-To cut a GitHub Release: push a `v*` tag; CI uploads the stable asset `dsh-file-mount.tgz` (`releases/latest/download/dsh-file-mount.tgz`). npm publish is deferred.
-
-**Run the tests after every DSH upgrade**: coupling points like the compaction checkpoint shape are pinned by tests (`tests/compaction.spec.ts`), so a DSH shape change fails loudly.
-
-Peers on DSH 0.1.5-rc.1 and later (`@deepseek-ai/dsh-*`, `@deepseek-ai/cordis` ^4.0.2, React 18; adapted to Session V3 and the `snapshotEvents` on-demand read API, pinned by the integration suite).
+Releasing: push a `v*` tag and CI uploads the stable filename `dsh-file-mount.tgz` (`releases/latest/download/dsh-file-mount.tgz`). Not published to npm.
 
 ## License
 
