@@ -11,12 +11,20 @@ import { MountedFilesView } from '../../src/client/MountedFilesView.tsx'
 import type { FileMountKey } from '../src/client/locales.ts'
 import { zh } from '../../src/client/locales.ts'
 
+/**
+ * Minimal stand-in for the DSH 0.1.5 slot runtime share: `useSession` carries
+ * session state only, and the conversation nodes hang off the registered Chat
+ * target snapshot behind `useConversation`.
+ */
 function viewProps(nodes: readonly ConversationNode[]) {
   const t = (key: FileMountKey): string => zh[key]
   return {
-    // Minimal stand-in for the slot runtime share: one stable snapshot.
-    useSession: (selector: (snapshot: { nodes: readonly ConversationNode[]; sessionId: string }) => unknown) =>
-      selector({ nodes, sessionId: 's1' }),
+    useSession: (selector: (snapshot: { sessionId: string }) => unknown) => selector({ sessionId: 's1' }),
+    useConversation: (selector: (snapshot: unknown) => unknown) =>
+      selector({
+        views: { get: (target: string) => (target === 'chat' ? { legacy: { nodes } } : undefined) },
+        activeTargets: new Set(['chat']),
+      }),
     useSessions: () => undefined,
     sessionId: 's1' as never,
     t,
@@ -174,8 +182,12 @@ describe('MountedFilesView', () => {
     const nodes = vi.fn<() => ConversationNode[]>()
     nodes.mockReturnValue(a)
     const props = {
-      useSession: (selector: (snapshot: { nodes: readonly ConversationNode[]; sessionId: string }) => unknown) =>
-        selector({ nodes: nodes(), sessionId: 's1' }),
+      useSession: (selector: (snapshot: { sessionId: string }) => unknown) => selector({ sessionId: 's1' }),
+      useConversation: (selector: (snapshot: unknown) => unknown) =>
+        selector({
+          views: { get: (target: string) => (target === 'chat' ? { legacy: { nodes: nodes() } } : undefined) },
+          activeTargets: new Set(['chat']),
+        }),
       useSessions: () => undefined,
       sessionId: 's1' as never,
       t: (key: FileMountKey): string => zh[key],

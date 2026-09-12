@@ -13,7 +13,7 @@
  * `npx @deepseek-ai/dsh` may sit for minutes downloading the full tree.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -69,9 +69,30 @@ function runDsh(dshArgs, home = dshHome()) {
   return run(launcher.command, [...launcher.args, ...dshArgs], { shell: launcher.kind !== 'node' && shell() })
 }
 
+/** Newest mtime under a source tree, or 0 when it does not exist. */
+function newestSourceMtime(dir) {
+  let newest = 0
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) newest = Math.max(newest, newestSourceMtime(path))
+    else newest = Math.max(newest, statSync(path).mtimeMs)
+  }
+  return newest
+}
+
+/**
+ * Build unless lib/ is already newer than every source file. A stale lib/ used
+ * to be packed silently, so an edit could ship an old bundle.
+ */
 function ensureBuilt(root = ROOT) {
-  if (existsSync(join(root, 'lib', 'index.js')) && existsSync(join(root, 'lib', 'client.js'))) return
-  process.stderr.write('dsh-file-mount: building lib/\n')
+  const outputs = [join(root, 'lib', 'index.js'), join(root, 'lib', 'client.js')]
+  if (outputs.every((path) => existsSync(path))) {
+    const built = Math.min(...outputs.map((path) => statSync(path).mtimeMs))
+    if (newestSourceMtime(join(root, 'src')) <= built) return
+    process.stderr.write('dsh-file-mount: lib/ is older than src/, rebuilding\n')
+  } else {
+    process.stderr.write('dsh-file-mount: building lib/\n')
+  }
   let result = run('pnpm', ['run', 'build'], { cwd: root })
   if ((result.status ?? 1) !== 0) result = run('npm', ['run', 'build'], { cwd: root })
   if ((result.status ?? 1) !== 0) fail('build failed (need pnpm or npm run build)', result.status ?? 1)

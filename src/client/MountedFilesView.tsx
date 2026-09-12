@@ -5,6 +5,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import {
+  conversationNodes,
   MountFold,
   freshnessLevel,
   worstFreshness,
@@ -79,9 +80,12 @@ function levelKey(level: keyof typeof LEVEL_KEYS) {
  * @param props - slot standard kit (useSession) plus the view locale seat.
  * @returns the mounted-files dashboard, or the localized empty hint.
  */
-export function MountedFilesView({ useSession, t }: MountedFilesViewProps) {
+export function MountedFilesView({ useConversation, useSession, t }: MountedFilesViewProps) {
   const sessionId = useSession((snapshot) => snapshot.sessionId)
-  const nodes = useSession((snapshot) => snapshot.nodes)
+  // DSH 0.1.5 split the old single snapshot: `useSession` now carries SESSION
+  // state only (queue/lifecycle/errors), and the assembled conversation nodes
+  // moved onto the Conversation snapshot's registered Chat target.
+  const nodes = useConversation(conversationNodes)
   const foldRef = useRef<MountFold | undefined>(undefined)
   const mounts = useMemo(() => {
     const fold = foldRef.current ?? (foldRef.current = new MountFold())

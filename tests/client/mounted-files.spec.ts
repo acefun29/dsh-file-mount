@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
 import {
+  conversationNodes,
   MountFold,
   foldMounts,
   freshnessLevel,
@@ -256,5 +257,30 @@ describe('MountFold (paginated history window)', () => {
     expect(views[0]!.hash).toBe('h2')
     expect(views[0]!.totalLines).toBe(120)
     expect(views[0]!.ranges).toEqual([{ start: 1, end: 20, expired: 0 }])
+  })
+})
+
+describe('conversationNodes (snapshot layouts)', () => {
+  const nodes = [contextNode(mountSource(), 3)]
+
+  it('reads the top-level nodes field older builds expose', () => {
+    expect(conversationNodes({ sessionId: 's1', nodes })).toBe(nodes)
+  })
+
+  it('reads the Chat target legacy mirror DSH 0.1.5 moved them to', () => {
+    const snapshot = {
+      sessionId: 's1',
+      views: { get: (target: string) => (target === 'chat' ? { legacy: { nodes } } : undefined) },
+      activeTargets: new Set(['chat']),
+    }
+    expect(conversationNodes(snapshot)).toBe(nodes)
+  })
+
+  it('degrades to a stable empty list when neither layout is present', () => {
+    const empty = conversationNodes({ sessionId: 's1', views: { get: () => undefined } })
+    expect(empty).toEqual([])
+    // Same reference every call: a fresh array would loop useSyncExternalStore.
+    expect(conversationNodes(undefined)).toBe(empty)
+    expect(conversationNodes({ nodes: 'not an array' })).toBe(empty)
   })
 })

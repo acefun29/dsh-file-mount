@@ -93,6 +93,36 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+/** Stable empty node list: a fresh array per selector call would loop useSyncExternalStore. */
+export const EMPTY_NODES: readonly ConversationNode[] = Object.freeze([])
+
+/**
+ * The assembled conversation nodes for the dashboard fold, read out of a
+ * snapshot the shell hands a selector. DSH 0.1.5 split the old single
+ * snapshot: `useSession` carries session state (queue/lifecycle) and the
+ * generic node list now hangs off the Conversation snapshot's registered Chat
+ * target (`views.get('chat').legacy.nodes`); older builds exposed it directly
+ * as a top-level `nodes` field. Duck-typed in one place so either layout
+ * works and a missing one degrades to the empty state instead of crashing.
+ * @param snapshot - the snapshot handed to a `useSession`/`useConversation` selector.
+ * @returns the node list, or a stable empty array when the layout is unknown.
+ */
+export function conversationNodes(snapshot: unknown): readonly ConversationNode[] {
+  if (!isRecord(snapshot)) return EMPTY_NODES
+  const top = snapshot['nodes']
+  if (Array.isArray(top)) return top as readonly ConversationNode[]
+  const views = snapshot['views']
+  if (!isRecord(views)) return EMPTY_NODES
+  const get = views['get']
+  if (typeof get !== 'function') return EMPTY_NODES
+  const chat = (get as (target: string) => unknown).call(views, 'chat')
+  if (!isRecord(chat)) return EMPTY_NODES
+  const legacy = chat['legacy']
+  if (!isRecord(legacy)) return EMPTY_NODES
+  const nodes = legacy['nodes']
+  return Array.isArray(nodes) ? nodes as readonly ConversationNode[] : EMPTY_NODES
+}
+
 /**
  * Full prompt length of an assistant node's usage, or undefined when absent.
  * DSH's TokenUsage counts are DISJOINT: `inputTokens` is the uncached input
