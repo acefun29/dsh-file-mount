@@ -65,16 +65,24 @@ export interface MountedFile {
 }
 
 /**
+ * Source of every message this plugin injects. Session format v4 refuses the
+ * retired shared `kind: 'plugin'` wrapper, so the plugin writes its own
+ * producer kind `'file-mount'`. Readers also accept the two older spellings
+ * (see `isFileMountSource` in mount-source.ts).
+ */
+export interface FileMountNoticeSource {
+  kind: 'file-mount'
+  /** Producer-declared presentation: a collapsed row shows the summary. */
+  form: 'notice'
+  /** One-line account of this message (row summary and trajectory preview). */
+  summary: string
+}
+
+/**
  * Structured mount state carried on the injected message's source
  * (merge-extensible JSON; the model-visible content mirrors it).
  */
-export interface MountSource {
-  kind: 'plugin'
-  plugin: 'file-mount'
-  /** Producer-declared presentation: a collapsed row shows the summary. */
-  form: 'notice'
-  /** One-line account of this mount (row summary and trajectory preview). */
-  summary: string
+export interface MountSource extends FileMountNoticeSource {
   /** Normalized absolute path (ledger identity). */
   path: string
   /** sha256 hex of the file content this mount was read from. */
@@ -93,4 +101,11 @@ export interface MountSource {
   spentTokens: number
   /** Freshness expiry threshold the host configured (for the browser fold). */
   freshnessThreshold?: number
+}
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    /** Mount records and the incompatible-read notice written by dsh-file-mount. */
+    'file-mount': FileMountNoticeSource | MountSource
+  }
 }

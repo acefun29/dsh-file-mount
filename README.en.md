@@ -124,6 +124,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 
 | Plugin | DSH |
 | --- | --- |
+| `main` (unreleased) | `0.1.5-rc.1` or later, including the session format v4 of `0.1.7` (verified on `0.1.7-rc.2`) |
 | `0.5.1` | `0.1.5-rc.1` or later (verified on `0.1.5-rc.2`) |
 | `≤0.5.0` | DSH from the `0.1.0-rc.5` line; no longer valid once `Session.events` was removed (0.1.2-alpha.4) |
 

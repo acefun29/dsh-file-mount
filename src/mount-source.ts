@@ -81,6 +81,26 @@ export function normalizeLedger(segments: readonly LedgerSegment[]): LedgerSegme
   return out
 }
 
+/** Producer kind written on every message source this plugin injects (session format v4). */
+export const FILE_MOUNT_SOURCE_KIND = 'file-mount'
+
+/**
+ * True for a source written by this plugin, in any of its persisted spellings:
+ * - `{ kind: 'file-mount' }`: written by this plugin on DSH 0.1.7 and later;
+ * - `{ kind: 'plugin:file-mount' }`: a v3 log migrated to v4 by DSH, which
+ *   rewrites unknown plugin wrappers to `plugin:<name>` and drops the `plugin` field;
+ * - `{ kind: 'plugin', plugin: 'file-mount' }`: a v3 log read as is (DSH 0.1.6 and earlier).
+ * @param source - any message source.
+ * @returns whether the source belongs to dsh-file-mount.
+ */
+export function isFileMountSource(source: unknown): source is Record<string, unknown> {
+  if (!isRecord(source)) return false
+  const kind = source['kind']
+  return kind === FILE_MOUNT_SOURCE_KIND
+    || kind === `plugin:${FILE_MOUNT_SOURCE_KIND}`
+    || (kind === 'plugin' && source['plugin'] === FILE_MOUNT_SOURCE_KIND)
+}
+
 /** What one mount message adds to the ledger (post-validation). */
 export interface MountDelta {
   hash: string
@@ -104,8 +124,7 @@ export interface ParsedMountSource {
  * messages) fold with born undefined and expired 0.
  */
 export function parseMountSource(source: unknown): ParsedMountSource | undefined {
-  if (!isRecord(source)) return undefined
-  if (source['kind'] !== 'plugin' || source['plugin'] !== 'file-mount') return undefined
+  if (!isFileMountSource(source)) return undefined
   const { path, hash, totalLines, mounted, mountKind, savedTokens, spentTokens } = source
   if (typeof path !== 'string' || path.length === 0
     || typeof hash !== 'string' || hash.length === 0

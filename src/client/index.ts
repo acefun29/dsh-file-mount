@@ -10,6 +10,8 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: the 'conversation.view' SlotMap row (declared by the slot's
 // owning package) must be in the program for the register calls to type.
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+// Type-only: the `ctx.slots` Context merge, declared by the UI renderer.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { MountedFilesView } from './MountedFilesView.tsx'
 import { en, NS, zh } from './locales.ts'
 

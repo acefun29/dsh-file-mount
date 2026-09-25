@@ -124,6 +124,7 @@ npx --yes @deepseek-ai/dsh plugin --profile web add "file:$Tgz"
 
 | 插件版本 | DSH |
 | --- | --- |
+| `main`（未发布） | `0.1.5-rc.1` 及以上，包括 `0.1.7` 的会话格式 v4（在 `0.1.7-rc.2` 上实测） |
 | `0.5.1` | `0.1.5-rc.1` 及以上（在 `0.1.5-rc.2` 上实测） |
 | `≤0.5.0` | `0.1.0-rc.5` 时代的 DSH；`Session.events` 被移除（0.1.2-alpha.4）之后不再适用 |
 
