@@ -49,3 +49,24 @@ export function subtract(have: LineRange[], want: LineRange): LineRange[] {
   }
   return missing
 }
+
+/**
+ * Overlap of two range lists (ascending, normalized, non-adjacent). Used to
+ * isolate the part of a re-sent window that overlaps expired history (the
+ * expiry re-send whose body tokens count as plugin overhead).
+ */
+export function intersect(a: LineRange[], b: LineRange[]): LineRange[] {
+  const xs = normalize(a)
+  const ys = normalize(b)
+  const out: LineRange[] = []
+  let i = 0
+  let j = 0
+  while (i < xs.length && j < ys.length) {
+    const start = Math.max(xs[i]!.start, ys[j]!.start)
+    const end = Math.min(xs[i]!.end, ys[j]!.end)
+    if (start <= end) out.push({ start, end })
+    if (xs[i]!.end < ys[j]!.end) i++
+    else j++
+  }
+  return out
+}

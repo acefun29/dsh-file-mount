@@ -60,7 +60,8 @@ export interface MountedFile {
   expiredHistory: ExpiredSegment[]
   /** Cumulative tokens this ledger kept out of the context for this path. */
   savedTokens: number
-  /** Cumulative tokens the plugin's own injected notes cost for this path. */
+  /** Cumulative plugin overhead for this path: ledger notices, dedup/remount
+   * markers and headers in tool results, and expiry re-sent bodies. */
   spentTokens: number
 }
 
@@ -89,7 +90,8 @@ export interface MountSource {
   mountKind: MountKind
   /** Tokens this decision kept out of the context (0 for new/remount). */
   savedTokens: number
-  /** Tokens this message's own note cost (the plugin overhead it injects). */
+  /** Plugin overhead carried by this decision (notice + marker text +
+   * expiry re-sent bodies). */
   spentTokens: number
   /** Freshness expiry threshold the host configured (for the browser fold). */
   freshnessThreshold?: number

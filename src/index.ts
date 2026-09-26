@@ -33,10 +33,11 @@ import { isCompactCheckpoint, shadowedSeqsOf } from './compaction.ts'
 import { diffLines, diffStats, remapSegments } from './diff.ts'
 import { matchesAnyGlob } from './glob.ts'
 import { FileContentCache } from './file-cache.ts'
+import { fingerprintText } from './hash.ts'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { inheritHistory, normalizeLedger, parseMountSource, pruneExpired } from './mount-source.ts'
 import { displayPath, normalizeAbsPath } from './paths.ts'
-import { normalize, subtract, type LineRange } from './ranges.ts'
+import { intersect, normalize, subtract, type LineRange } from './ranges.ts'
 import {
   formatRange,
   markerHead,
@@ -50,8 +51,8 @@ import type { ExpiredSegment, LedgerSegment, MountKind, MountedFile, MountSource
 
 export { FileContentCache } from './file-cache.ts'
 export { MountStore, type LedgerRecord } from './store.ts'
-export { normalize, subtract, type LineRange } from './ranges.ts'
-export { hashBuffer } from './hash.ts'
+export { intersect, normalize, subtract, type LineRange } from './ranges.ts'
+export { fingerprintText, hashBuffer } from './hash.ts'
 export { displayPath, normalizeAbsPath } from './paths.ts'
 export {
   formatRange,
@@ -159,6 +160,21 @@ function asPathValue(value: unknown): string | undefined {
   return v['path']
 }
 
+/** Narrow shape of a `write` canonical value: the path plus the written
+ * content when the tool reports it (dsh-tool-fs carries LF-normalized
+ * `after`; used to verify disk still matches what the model wrote). */
+interface WriteValue {
+  path: string
+  after?: string
+}
+
+function asWriteValue(value: unknown): WriteValue | undefined {
+  const path = asPathValue(value)
+  if (path === undefined) return undefined
+  const after = (value as Record<string, unknown>)['after']
+  return { path, ...typeof after === 'string' ? { after } : {} }
+}
+
 /** Duck-typed `ctx.fs.config.cwd` from `@deepseek-ai/dsh-fs-local` (optional). */
 function pluginFsCwd(ctx: Context): string | undefined {
   const fs = ctx.get('fs') as { config?: { cwd?: unknown } } | undefined
@@ -195,8 +211,8 @@ export class FileMountService extends Service {
   private readonly pinOrders = new Map<string, string[]>()
   /** Emit the incompatible-read warning at most once per process. */
   private compatWarned = false
-  /** Per-session silent-dedup savings waiting to ride the next real message. */
-  private readonly pendingDedup = new Map<string, Map<string, number>>()
+  /** Per-session silent-dedup accounting waiting to ride the next real message. */
+  private readonly pendingDedup = new Map<string, Map<string, { saved: number; spent: number }>>()
   /** Per-session current context length (latest request FULL prompt tokens:
    * uncached input + cacheRead + cacheWrite, from usage — DSH counts are
    * disjoint). */
@@ -333,9 +349,9 @@ export class FileMountService extends Service {
     result: ToolExecutionResult,
     downstream: Extract<PostToolDecision, { kind: 'accept' }>,
   ): Promise<PostToolDecision> {
-    const path = asPathValue(result.value)
-    if (path === undefined) return downstream
-    const absPath = normalizeAbsPath(path)
+    const writeValue = asWriteValue(result.value)
+    if (writeValue === undefined) return downstream
+    const absPath = normalizeAbsPath(writeValue.path)
     this.cache.invalidate(absPath)
     this.clearValveCount(agent.id, absPath)
     this.pendingDedup.get(agent.id)?.delete(absPath)
@@ -344,6 +360,19 @@ export class FileMountService extends Service {
       if (lookup === null) return downstream
       const entry = lookup.current
       if (entry.lineCount < 1) return downstream
+      // Format-on-save guard: when the write tool reports the content it wrote
+      // (LF-normalized `after`), verify disk still matches before declaring the
+      // whole file known. A save hook that rewrote the file means the model
+      // never saw the on-disk bytes — mounting them as "known" would let a
+      // later read dedup away content the model has no copy of. Skip the
+      // mount; the next read anchors fresh off the freshly cached draft.
+      if (writeValue.after !== undefined && entry.lineHashes.length > 0) {
+        const written = fingerprintText(writeValue.after)
+        const mismatch = written.length !== entry.lineHashes.length
+          || written.some((fp, i) => fp !== entry.lineHashes[i])
+        if (mismatch) return downstream
+      }
+      const path = writeValue.path
       const store = await this.storeFor(agent)
       const want: LineRange = { start: 1, end: entry.lineCount }
       const shown = this.markerPath(agent, path)
@@ -398,11 +427,11 @@ export class FileMountService extends Service {
     }
   }
 
-  /** Take (and clear) the silent-dedup savings pending for a session+file, so
-   * they ride the next real message and resume reconstruction stays exact. */
-  private takePendingSaved(agentId: string, absPath: string): number {
+  /** Take (and clear) the silent-dedup accounting parked for a session+file,
+   * so it rides the next real message and resume reconstruction stays exact. */
+  private takePending(agentId: string, absPath: string): { saved: number; spent: number } {
     const perAgent = this.pendingDedup.get(agentId)
-    const pending = perAgent?.get(absPath) ?? 0
+    const pending = perAgent?.get(absPath) ?? { saved: 0, spent: 0 }
     if (perAgent !== undefined) {
       perAgent.delete(absPath)
       if (perAgent.size === 0) this.pendingDedup.delete(agentId)
@@ -445,7 +474,10 @@ export class FileMountService extends Service {
   /** Persist every live store at service shutdown (reliable cross-session
    * totals even though agent/disposed may not precede plugin disposal). */
   private persistAllStats(): void {
-    for (const store of this.stores.values()) void this.persistStats(store)
+    for (const [agentId, store] of this.stores) {
+      this.flushPendingDedup(agentId, store)
+      void this.persistStats(store)
+    }
   }
 
   /** Cross-session totals from the stats file (or null when unavailable). */
@@ -491,15 +523,15 @@ export class FileMountService extends Service {
     if (existing === undefined) {
       this.clearValveCount(agent.id, absPath)
       const head = markerHead(shown, entry.hash, [want])
-      const spentTokens = estimateTokens(head)
-      const pendingSaved = this.takePendingSaved(agent.id, absPath)
+      const pending = this.takePending(agent.id, absPath)
+      const spentTokens = estimateTokens(head) + pending.spent
       const fresh = this.stampBornNew(agent.id, want, lines, windowStart)
-      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, fresh, pendingSaved, spentTokens)
+      this.mount(store, agent.id, absPath, entry.hash, value.totalLines, fresh, pending.saved, spentTokens)
       return this.acceptWith(
         downstream,
         [this.contextMessage(
           head,
-          this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', pendingSaved, spentTokens),
+          this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', pending.saved, spentTokens),
         )],
       )
     }
@@ -511,20 +543,34 @@ export class FileMountService extends Service {
     if (existing.hash !== entry.hash) {
       this.clearValveCount(agent.id, absPath)
       const previous = lookup.previous
-      const diffable = lookup.changed
-        && previous !== undefined
-        && previous.hash === existing.hash
-        && previous.lineHashes.length > 0
-        && entry.lineHashes.length > 0
-        && entry.lineCount === value.totalLines
+      // The cache's previous content is a usable diff base only when it is
+      // exactly what the ledger last mounted.
+      const baseMatches = previous !== undefined && previous.hash === existing.hash
       let baseMounted: LedgerSegment[] = []
       let stats: { added: number; removed: number; unchanged: number } | undefined
-      if (diffable) {
+      // The line-draft diff additionally needs fingerprints on BOTH sides
+      // (capped files keep none: their lineCount is 0) and the fresh read's
+      // line count agreeing with the draft.
+      if (baseMatches && previous.lineHashes.length > 0 && entry.lineHashes.length > 0
+        && entry.lineCount === value.totalLines) {
         const oldToNew = diffLines(previous.lineHashes, entry.lineHashes)
         const remapped = remapSegments(existing.segments, oldToNew)
         if (remapped.length > 0) {
           baseMounted = remapped
           stats = diffStats(oldToNew, entry.lineCount)
+        }
+      } else if (baseMatches && lookup.append !== undefined) {
+        // Pure append to a capped (fingerprint-less) file: mounted coordinates
+        // stay valid as-is; only an extended old last line (the old content
+        // did not end with a newline) drops out and re-sends below.
+        baseMounted = lookup.append.boundaryIntact
+          ? [...existing.segments]
+          : this.dropTailLine(existing.segments, existing.totalLines)
+        const boundaryChanged = lookup.append.boundaryIntact ? 0 : 1
+        stats = {
+          added: value.totalLines - existing.totalLines + boundaryChanged,
+          removed: boundaryChanged,
+          unchanged: existing.totalLines - boundaryChanged,
         }
       }
       const missing = subtract(baseMounted, want)
@@ -537,10 +583,15 @@ export class FileMountService extends Service {
         missing,
       })
       const covered = subtract(missing, want)
-      const pendingSaved = this.takePendingSaved(agent.id, absPath)
-      const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pendingSaved
+      const pending = this.takePending(agent.id, absPath)
+      const savedTokens = estimateRangeTokens(lines, windowStart, covered) + pending.saved
       const marker = renderRemountMarker(shown, entry.hash, normalize([...baseMounted, ...missing]), stats)
-      const spentTokens = estimateTokens(marker)
+      // The marker lands in context twice (ledger note + tool-result head)
+      // and each missing range adds a `--- Ls-e ---` header to the body; the
+      // body lines themselves are changed content the model needs, not
+      // overhead.
+      const headerTokens = missing.reduce((n, r) => n + estimateTokens(`--- ${formatRange(r.start, r.end)} ---`), 0)
+      const spentTokens = 2 * estimateTokens(marker) + headerTokens + pending.spent
       // Fresh born metadata on the re-sent ranges; history (expired counts)
       // survives the hash change and is inherited by overlapping re-mounts.
       const blockHead = markerHead(shown, entry.hash, normalize([...baseMounted, ...missing]))
@@ -585,7 +636,7 @@ export class FileMountService extends Service {
         const count = this.getValveCount(agent.id, absPath) + 1
         if (count >= this.valveReads) {
           this.clearValveCount(agent.id, absPath)
-          const pendingSaved = this.takePendingSaved(agent.id, absPath)
+          const pending = this.takePending(agent.id, absPath)
           const outsideSegments: LedgerSegment[] = []
           const newHistory: ExpiredSegment[] = [...history]
           let maxOverlapExpired = 0
@@ -631,9 +682,9 @@ export class FileMountService extends Service {
           freshSeg.expired = maxOverlapExpired
           const postMounted = normalizeLedger([...outsideSegments, freshSeg])
           const head = markerHead(shown, entry.hash, postMounted)
-          const spentTokens = estimateTokens(head)
-          store.replaceSegments(absPath, postMounted, newHistory, pendingSaved, spentTokens)
-          const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', pendingSaved, spentTokens)
+          const spentTokens = estimateTokens(head) + pending.spent
+          store.replaceSegments(absPath, postMounted, newHistory, pending.saved, spentTokens)
+          const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [want], 'new', pending.saved, spentTokens)
           return this.acceptWith(downstream, [this.contextMessage(head, source)])
         }
         this.setValveCount(agent.id, absPath, count)
@@ -647,40 +698,48 @@ export class FileMountService extends Service {
           perAgent = new Map()
           this.pendingDedup.set(agent.id, perAgent)
         }
-        perAgent.set(absPath, 0)
+        perAgent.set(absPath, { saved: 0, spent: 0 })
         const noteText = `${markerHead(shown, entry.hash, mounted)} - already mounted, saved ≈ ${savedTokens} tokens`
-        const spentTokens = estimateTokens(noteText)
+        const marker = renderDedupMarker(shown, entry.hash, mounted)
+        // Both context additions are plugin overhead: the ledger note AND
+        // the dedup marker replacing the tool result.
+        const spentTokens = estimateTokens(noteText) + estimateTokens(marker)
         store.replaceSegments(absPath, mounted, history, savedTokens, spentTokens)
         const source = this.mountSource(store, absPath, entry.hash, value.totalLines, [], 'dedup', savedTokens, spentTokens)
         return this.acceptWith(
           downstream,
           [this.contextMessage(noteText, source)],
-          [textBlock(renderDedupMarker(shown, entry.hash, mounted))],
+          [textBlock(marker)],
         )
       }
-      // Repeated dedup: quiet. Persist pruned state and merge savings.
+      // Repeated dedup: quiet. Persist pruned state and park the accounting
+      // (saved window AND the marker's own cost) — it rides the next real
+      // message for this file, so the host ledger and the browser fold keep
+      // sharing one carrier (see takePending).
+      const silentMarker = renderDedupMarker(shown, entry.hash, mounted)
       store.replaceSegments(absPath, mounted, history, 0, 0)
       const prior = this.pendingDedup.get(agent.id)!.get(absPath)!
-      this.pendingDedup.get(agent.id)!.set(absPath, prior + savedTokens)
+      prior.saved += savedTokens
+      prior.spent += estimateTokens(silentMarker)
       return this.acceptWith(
         downstream,
         [],
-        [textBlock(renderDedupMarker(shown, entry.hash, mounted))],
+        [textBlock(silentMarker)],
       )
     }
     this.clearValveCount(agent.id, absPath)
     const covered = subtract(missing, want)
     const added = missing.map((s) => formatRange(s.start, s.end)).join(', ')
     const note = `[file-mount: ${shown}] +${added} - ${missing.length === 1 ? 'range' : 'ranges'} added to context`
-    const spentTokens = estimateTokens(note)
+    const noteTokens = estimateTokens(note)
     const coveredSaved = estimateRangeTokens(lines, windowStart, covered)
-    const pendingPeek = this.pendingDedup.get(agent.id)?.get(absPath) ?? 0
+    const pendingPeek = this.pendingDedup.get(agent.id)?.get(absPath)?.saved ?? 0
     // A window that is entirely new (expiry re-send, pure tail) must still
     // land in the ledger. The floor only refuses overlap-saves that do not
     // pay for the note.
-    if (this.minSavedTokens > 0 && covered.length > 0 && coveredSaved + pendingPeek - spentTokens < this.minSavedTokens) return downstream
-    const pendingSaved = this.takePendingSaved(agent.id, absPath)
-    const savedTokens = coveredSaved + pendingSaved
+    if (this.minSavedTokens > 0 && covered.length > 0 && coveredSaved + pendingPeek - noteTokens < this.minSavedTokens) return downstream
+    const pending = this.takePending(agent.id, absPath)
+    const savedTokens = coveredSaved + pending.saved
     const block = renderMountBlock({
       path: shown,
       hash: entry.hash,
@@ -692,6 +751,15 @@ export class FileMountService extends Service {
     const blockHead = markerHead(shown, entry.hash, normalize([...mounted, ...missing]))
     const fresh = this.stampBornRanges(agent.id, blockHead, missing, lines, windowStart)
     const inherited = inheritHistory(fresh, history)
+    // Plugin overhead in this decision: the ledger note, the block head and
+    // per-range headers inside the tool result, plus the body lines that are
+    // expiry RE-SENDS (ranges whose expired-history entries were consumed by
+    // the re-mount — the model was already sent that content once). Body
+    // lines mounting genuinely new ranges are not overhead.
+    const consumed = history.filter((item) => !inherited.history.includes(item))
+    const reSentTokens = estimateRangeTokens(lines, windowStart, intersect(missing, consumed))
+    const headerTokens = missing.reduce((n, r) => n + estimateTokens(`--- ${formatRange(r.start, r.end)} ---`), 0)
+    const spentTokens = noteTokens + estimateTokens(blockHead) + headerTokens + reSentTokens + pending.spent
     const postMounted = normalizeLedger([...mounted, ...inherited.segments])
     this.mount(store, agent.id, absPath, entry.hash, value.totalLines, postMounted, savedTokens, spentTokens, inherited.history)
     const source = this.mountSource(store, absPath, entry.hash, value.totalLines, missing, 'increment', savedTokens, spentTokens)
@@ -772,6 +840,20 @@ export class FileMountService extends Service {
     if (oldLen <= 0 || end < start) return undefined
     const scaled = Math.round(seg.tokens * (end - start + 1) / oldLen)
     return scaled > 0 ? scaled : undefined
+  }
+
+  /** Drop one line (the append-extended old last line) from mounted segments,
+   * preserving freshness metadata on the survivors. */
+  private dropTailLine(segments: readonly LedgerSegment[], line: number): LedgerSegment[] {
+    const out: LedgerSegment[] = []
+    for (const seg of segments) {
+      if (line < seg.start || line > seg.end) {
+        out.push(seg)
+      } else if (seg.start < line) {
+        out.push({ ...seg, end: line - 1 })
+      }
+    }
+    return out
   }
 
   /** Stamp fresh-born and tokens on a newly mounted single range (initial read or safety-valve remount). */
@@ -862,10 +944,33 @@ export class FileMountService extends Service {
     this.stores.delete(id)
     this.cursors.delete(id)
     this.restores.delete(id)
-    this.pendingDedup.delete(id)
     this.contextL.delete(id)
     this.valveCounts.delete(id)
-    if (store !== undefined) void this.persistStats(store)
+    if (store !== undefined) {
+      this.flushPendingDedup(id, store)
+      void this.persistStats(store)
+    } else {
+      this.pendingDedup.delete(id)
+    }
+  }
+
+  /**
+   * Fold one session's parked silent-dedup accounting into the store so the
+   * cross-session stats file does not lose it at teardown. Refold does NOT
+   * flush: parked amounts ride the next mount message's source instead
+   * (pendingDedup survives refold), so the host ledger and the browser fold
+   * keep reading the same totals off the same carrier.
+   */
+  private flushPendingDedup(agentId: string, store: MountStore): void {
+    const perAgent = this.pendingDedup.get(agentId)
+    this.pendingDedup.delete(agentId)
+    if (perAgent === undefined) return
+    for (const [absPath, pending] of perAgent) {
+      const file = store.get(absPath)
+      if (file !== undefined && (pending.saved > 0 || pending.spent > 0)) {
+        store.replaceSegments(absPath, file.segments, file.expiredHistory, pending.saved, pending.spent)
+      }
+    }
   }
 
   /** One-time warning when the read result shape is no longer recognized. */
@@ -1098,7 +1203,8 @@ export class FileMountService extends Service {
     store.clear()
     store.replay(this.visibleMountRecords(agent))
     this.resyncPins(agent.id, store)
-    this.pendingDedup.delete(agent.id)
+    // pendingDedup deliberately survives: the parked amounts ride the next
+    // mount message's source, keeping one carrier for both ledger halves.
     this.valveCounts.delete(agent.id)
   }
   /** Replay the ledger from plugin-injected message sources in the live log. */

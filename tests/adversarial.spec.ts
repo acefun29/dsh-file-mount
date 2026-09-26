@@ -283,4 +283,37 @@ describe('file-mount adversarial', () => {
     expect(mountMessages(agent)).toEqual([])
     expect(ctx.fileMount.ledger(agent)).toEqual([])
   })
+
+  it('minified files with lines beyond the read display cap dedup and diff by line geometry', async () => {
+    const file = join(dir, 'minified.json')
+    // One 5k-char line: the read tool truncates its DISPLAY at 2000 chars,
+    // but the ledger works off line geometry and disk fingerprints.
+    const longLine = `{"data":"${'x'.repeat(5000)}"}`
+    await writeFile(file, `${longLine}\n${LINE(2)}\n${LINE(3)}\n`, 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: file, offset: 1, limit: 3 }),
+      toolCallResponse('c2', 'read', { file_path: file, offset: 1, limit: 3 }),
+      textResponse('first turn done'),
+      toolCallResponse('c3', 'read', { file_path: file, offset: 1, limit: 3 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = await ctx.agentLoop.create(SessionId('ad-minified'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+
+    // Full coverage on the re-read dedupes; the truncated long line still
+    // counts as mounted (no spurious remount).
+    expect(resultText(agent, 'c2')).toContain('already mounted, not re-added')
+    expect(geo(ctx.fileMount.ledger(agent)[0]!.segments)).toEqual([{ start: 1, end: 3 }])
+
+    // An external change to a SHORT line remounts only that line — the long
+    // line's disk fingerprint matches across the change.
+    await writeFile(file, `${longLine}\n${LINE(9)}\n${LINE(3)}\n`, 'utf8')
+    send(agent, 'read after change')
+    await waitForIdle(ctx, agent)
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'dedup', 'remount'])
+    expect(sources[2]!['added']).toEqual([{ start: 2, end: 2 }])
+  })
 })

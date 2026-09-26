@@ -50,6 +50,16 @@ export interface CacheLookup {
   previous?: FileCacheEntry
   /** True when the content changed (current.hash !== previous.hash). */
   changed: boolean
+  /**
+   * Set when the content changed, the file GREW, at least one side kept no
+   * line fingerprints (capped file, so the LCS draft diff is unavailable),
+   * and the old bytes are a strict prefix of the new ones — a pure append.
+   * Detected by hashing the new buffer's old-size prefix against the previous
+   * hash (the buffer is already in memory; no extra I/O). `boundaryIntact` is
+   * false when the old file did not end with a newline, meaning the append
+   * extended the old last line and that line's content changed.
+   */
+  append?: { boundaryIntact: boolean }
 }
 
 /** Injectables kept narrow for deterministic tests. */
@@ -187,7 +197,21 @@ export class FileContentCache {
         const entry = this.buildEntry(st, buf)
         const previous = cached?.entry
         const changed = previous !== undefined && previous.hash !== entry.hash
-        const result = changed ? { current: entry, previous, changed: true as const } : { current: entry, changed: false as const }
+        // Append fast path for capped files: when the draft diff is
+        // unavailable (either side kept no fingerprints) but the file grew,
+        // a prefix hash tells a pure append from an arbitrary rewrite.
+        let append: { boundaryIntact: boolean } | undefined
+        if (changed && previous !== undefined
+          && (previous.lineHashes.length === 0 || entry.lineHashes.length === 0)
+          && previous.size > 0n && st.size > previous.size) {
+          const oldSize = Number(previous.size)
+          if (hashBuffer(buf.subarray(0, oldSize)) === previous.hash) {
+            append = { boundaryIntact: buf[oldSize - 1] === 0x0a }
+          }
+        }
+        const result = changed
+          ? { current: entry, previous, changed: true as const, ...append !== undefined ? { append } : {} }
+          : { current: entry, changed: false as const }
         if ((this.epoch.get(absPath) ?? 0) !== epochAtStart) return result
         this.byPath.set(absPath, { entry, lastVerified: Date.now(), stale: false })
         this.evict()

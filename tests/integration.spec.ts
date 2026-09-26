@@ -17,6 +17,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { MountStore } from '../src/store.ts'
 import { hashBuffer } from '../src/hash.ts'
 import { normalizeAbsPath } from '../src/paths.ts'
+import { markerHead } from '../src/render.ts'
+import { estimateTokens } from '../src/tokens.ts'
 import { harness, MockAdapter, textResponse, toolCallResponse, waitForIdle } from './harness.ts'
 
 /** Text chunks with a controllable input-token usage (freshness clock). */
@@ -1030,5 +1032,215 @@ describe('file-mount integration', () => {
     expect(ctx.fileMount.ledger(agent)).toEqual([])
     expect(mountMessages(agent)).toEqual([])
     expect(resultText(agent, 'c1')).not.toContain('already mounted')
+  })
+
+  it('does not mount a written file as known when a save hook rewrote it (format-on-save)', async () => {
+    const subject = join(dir, 'formatted.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    const written = [line('a'), line('b'), line('c')].join('\n') + '\n'
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'write', { file_path: subject, content: written }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 10 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    // Simulate a backend/hook that rewrites the content on its way to disk but
+    // still reports the pre-format text in the outcome (so value.after shows
+    // what the MODEL wrote while disk holds something else).
+    const fsSvc = ctx.get('fs') as {
+      writeText: (target: unknown, content: string, ...rest: unknown[]) => Promise<Record<string, unknown>>
+    }
+    const origWrite = fsSvc.writeText.bind(fsSvc)
+    fsSvc.writeText = async (target, content, ...rest) => {
+      const outcome = await origWrite(target, content + '// formatted\n', ...rest)
+      return { ...outcome, after: content }
+    }
+    const agent = await ctx.agentLoop.create(SessionId('it-write-hook'), { provider: 'mock', model: 'mock' })
+    send(agent, 'write it')
+    await waitForIdle(ctx, agent)
+
+    // The write must NOT mount the file as known: no mount message yet.
+    expect(mountMessages(agent)).toEqual([])
+
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    // The read anchors fresh and the model sees the on-disk content, hook line included.
+    expect(resultText(agent, 'c2')).toContain('<content>')
+    expect(resultText(agent, 'c2')).toContain('// formatted')
+    expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new'])
+  })
+
+  it('does not re-send line 1 when a rewrite drops only the BOM', async () => {
+    const subject = join(dir, 'bom.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    const body = ['1', '2', '3'].map(line).join('\n') + '\n'
+    await writeFile(subject, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(body, 'utf8')]))
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir })
+    const agent = await ctx.agentLoop.create(SessionId('it-bom'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    // Rewrite WITHOUT the BOM (the edit tool's UTF-8 round trip drops it); text unchanged.
+    await writeFile(subject, body, 'utf8')
+    send(agent, 'read again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
+    // Hash changed (BOM bytes differ) but no line did: nothing is re-sent.
+    expect(sources[1]!['added']).toEqual([])
+    expect(resultText(agent, 'c2')).toContain('file changed: +0/-0 lines (~3 unchanged)')
+    expect(resultText(agent, 'c2')).not.toContain('--- L1')
+  })
+
+  it('remounts only the new tail for a pure append to a capped (fingerprint-less) file', async () => {
+    const subject = join(dir, 'capped-append.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    const ten = Array.from({ length: 10 }, (_, i) => line(String(i + 1)))
+    await writeFile(subject, ten.join('\n') + '\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 12 }),
+      textResponse('second turn done'),
+    ])
+    // Tiny fingerprint cap: this file keeps no line draft (the LCS diff path is closed).
+    const ctx = await harness(adapter, { cwd: dir, config: { maxFingerprintBytes: 100 } })
+    const agent = await ctx.agentLoop.create(SessionId('it-append-capped'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    await writeFile(subject, [...ten, line('11'), line('12')].join('\n') + '\n', 'utf8')
+    send(agent, 'read again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
+    // Append fast path: old coordinates stay valid, only the grown tail is added.
+    expect(sources[1]!['added']).toEqual([{ start: 5, end: 12 }])
+    expect(resultText(agent, 'c2')).toContain('file changed: +2/-0 lines (~10 unchanged)')
+    expect(resultText(agent, 'c2')).toContain('--- L5-12 ---')
+    expect(resultText(agent, 'c2')).not.toContain(`1: ${line('1')}`)
+  })
+
+  it('re-sends the extended boundary line when an append continues the old last line', async () => {
+    const subject = join(dir, 'capped-append-midline.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    // No trailing newline: the append below EXTENDS old line 3.
+    const initial = ['1', '2', '3'].map(line).join('\n')
+    await writeFile(subject, initial, 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { maxFingerprintBytes: 100 } })
+    const agent = await ctx.agentLoop.create(SessionId('it-append-midline'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    await writeFile(subject, `${initial}TAIL\n${line('4')}\n`, 'utf8')
+    send(agent, 'read again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
+    // Old line 3 changed (grew a TAIL), so only L1-2 survive; L3-4 re-send.
+    expect(sources[1]!['added']).toEqual([{ start: 3, end: 4 }])
+    expect(resultText(agent, 'c2')).toContain('file changed: +2/-1 lines (~2 unchanged)')
+    expect(resultText(agent, 'c2')).toContain(`3: ${line('3')}TAIL`)
+  })
+
+  it('falls back to a whole-window remount when a capped file rewrite is not an append', async () => {
+    const subject = join(dir, 'capped-rewrite.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('first turn done'),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }),
+      textResponse('second turn done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { maxFingerprintBytes: 100 } })
+    const agent = await ctx.agentLoop.create(SessionId('it-capped-rewrite'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    // Same size, different content: not an append, no draft — whole window re-sends.
+    await writeFile(subject, ['1', '2', '3'].map((n) => n + 'y'.repeat(39)).join('\n') + '\n', 'utf8')
+    send(agent, 'read again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'remount'])
+    expect(sources[1]!['added']).toEqual([{ start: 1, end: 3 }])
+    expect(resultText(agent, 'c2')).toContain('file changed since last mount, remounting')
+    expect(resultText(agent, 'c2')).toContain('--- L1-3 ---')
+  })
+
+  it('flushes parked silent-dedup savings into the stats file at disposal', async () => {
+    const statsPath = join(dir, 'stats-pending.json')
+    const subject = join(dir, 'stats-pending.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3', '4', '5', '6'].map(line).join('\n') + '\n', 'utf8')
+    const adapter = new MockAdapter([
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      toolCallResponse('c3', 'read', { file_path: subject, offset: 1, limit: 4 }),
+      textResponse('done'),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { statsFile: statsPath, valveReads: 0 } })
+    const agent = await ctx.agentLoop.create(SessionId('it-stats-pending'), { provider: 'mock', model: 'mock' })
+    send(agent, 'read thrice')
+    await waitForIdle(ctx, agent)
+    // c2 dedups with a note; c3 is a SILENT dedup whose savings stay parked.
+    expect(mountMessages(agent).map((s) => s['mountKind'])).toEqual(['new', 'dedup'])
+    await ctx.fiber.dispose()
+    // persistStats is fire-and-forget; give it a tick to land.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const stats = JSON.parse(await readFile(statsPath, 'utf8')) as { savedTokens: number; spentTokens: number }
+    // 40 (first dedup) + 40 (silent dedup, flushed at disposal — previously lost).
+    expect(stats.savedTokens).toBe(80)
+    expect(stats.spentTokens).toBeGreaterThan(0)
+  })
+
+  it('charges expiry re-send bodies and markers as plugin overhead (spentTokens)', async () => {
+    const subject = join(dir, 'freshness-spent.txt')
+    const line = (n: string) => n + 'x'.repeat(39)
+    await writeFile(subject, ['1', '2', '3'].map(line).join('\n') + '\n', 'utf8')
+
+    const adapter = new MockAdapter([
+      textWithUsage('hi', 100),
+      toolCallResponse('c1', 'read', { file_path: subject, offset: 1, limit: 3 }, 110),
+      textWithUsage('ok', 150),
+      textWithUsage('grow', 800),
+      toolCallResponse('c2', 'read', { file_path: subject, offset: 1, limit: 3 }, 810),
+      textWithUsage('done', 850),
+    ])
+    const ctx = await harness(adapter, { cwd: dir, config: { contextWindow: 600, safeTokens: 100 } })
+    const agent = await ctx.agentLoop.create(SessionId('it-freshness-spent'), { provider: 'mock', model: 'mock' })
+    send(agent, 'hello')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read it')
+    await waitForIdle(ctx, agent)
+    send(agent, 'grow context')
+    await waitForIdle(ctx, agent)
+    send(agent, 'read it again')
+    await waitForIdle(ctx, agent)
+
+    const sources = mountMessages(agent)
+    expect(sources.map((s) => s['mountKind'])).toEqual(['new', 'increment'])
+    // The increment re-sent 3 expired lines (3 × 10 = 30 tokens): the body is
+    // overhead, as are the note, the block head and the range header.
+    const hash = hashBuffer(await readFile(subject))
+    const note = '[file-mount: freshness-spent.txt] +L1-3 - range added to context'
+    const head = markerHead('freshness-spent.txt', hash, [{ start: 1, end: 3 }])
+    const expected = estimateTokens(note) + estimateTokens(head) + estimateTokens('--- L1-3 ---') + 30
+    expect(sources[1]!['spentTokens']).toBe(expected)
+    expect(sources[1]!['savedTokens']).toBe(0)
   })
 })

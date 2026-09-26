@@ -168,6 +168,40 @@ describe('pruneExpired', () => {
     expect(r.active).toHaveLength(1)
     expect(r.history).toEqual([])
   })
+
+  it('does not prune a segment whose tokens exceed resendBudget this round', () => {
+    // tokens 600 at born 50 under L=700 would expire on score (≈0.54 < 0.6)…
+    const r = pruneExpired(
+      [{ start: 1, end: 5, born: 50, tokens: 600, expired: 0 }],
+      700,
+      0.6,
+      { ...tightWindow, resendBudget: 500 },
+    )
+    expect(r.active).toHaveLength(1)
+    expect(r.history).toEqual([])
+  })
+
+  it('prunes the same segment when it fits resendBudget (only the budget differs)', () => {
+    const r = pruneExpired(
+      [{ start: 1, end: 5, born: 50, tokens: 600, expired: 0 }],
+      700,
+      0.6,
+      { ...tightWindow, resendBudget: 700 },
+    )
+    expect(r.active).toEqual([])
+    expect(r.history).toEqual([{ start: 1, end: 5, expired: 1 }])
+  })
+
+  it('resendBudget does not protect segments without a token estimate', () => {
+    const r = pruneExpired(
+      [{ start: 1, end: 5, born: 50, expired: 0 }],
+      700,
+      0.6,
+      { ...tightWindow, resendBudget: 500 },
+    )
+    expect(r.active).toEqual([])
+    expect(r.history).toEqual([{ start: 1, end: 5, expired: 1 }])
+  })
 })
 
 describe('inheritHistory', () => {
