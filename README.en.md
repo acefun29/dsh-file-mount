@@ -24,9 +24,9 @@ This plugin keeps a ledger of what has been read. From the second read onward, o
 
 ![Mounted Files dashboard](docs/mounted-files.png)
 
-- **Model side**: already-mounted ranges are never re-sent (dedupe marker); missing or changed lines ride the durable tool result (increment / remount) while the notice is a ledger declaration only; edits re-send only the changed lines (append-only logs only re-send the new tail); files the AI just wrote are mounted as already known and read for free; a `file_mount_forget` tool lets the model force a fresh re-read.
+- **Model side**: already-mounted ranges are never re-sent (dedupe marker); missing or changed lines ride the durable tool result (increment / remount) while the notice is a ledger declaration only; edits re-send only the changed lines (append-only logs only re-send the new tail — append detection also covers large files above the fingerprint cap); files the AI just wrote are mounted as already known and read for free (unless the on-disk content no longer matches what the model wrote, e.g. a format-on-save hook rewrote it); a `file_mount_forget` tool lets the model force a fresh re-read.
 - **UI side**: the Mounted Files tab is a dashboard; opening it stays at the **top**, with **net savings and path search pinned** while the file list scrolls. Each file row expands into its **segments**, each with a **freshness bar** (green = fresh / yellow = aging / orange = near expiry / red = expired / grey = unknown) and an **expiry count**; plus a **coverage map** (filled spans show where the mounted lines sit in the file), search, sorting, and the net-savings / CNY figures. Context injection rows in the conversation carry a marker when the file changed.
-- **Savings accounting**: CJK characters count as 1 token each, other characters as chars ÷ 4. Both the saved tokens and the plugin's own note overhead are tracked, and the UI shows the **net** figure (floored at 0); optional cross-session totals persist to a `statsFile`.
+- **Savings accounting**: CJK characters count as 1 token each, other characters as chars ÷ 4. Both the saved tokens and the plugin's own overhead (notices, markers, expiry re-sends) are tracked, and the UI shows the **net** figure (floored at 0); optional cross-session totals persist to a `statsFile`.
 
 ## Install
 
@@ -93,7 +93,7 @@ Every key, with its default:
 | `ttlMs` | `300000` | Cache safety valve: forced re-read interval when a stat looks unchanged |
 | `maxPinnedFiles` | `256` | Max mounted files pinned per session |
 | `minSavedTokens` | `16` | Dedup/increment below this net saving passes through natively without writing the ledger (and does not count toward the safety valve) |
-| `maxFingerprintBytes` | `1000000` | Files above this keep no line draft (whole-window remount on change) |
+| `maxFingerprintBytes` | `1000000` | Files above this keep no line draft (a pure append is still detected and re-sends only the new tail; otherwise whole-window remount) |
 | `maxManagedBytes` | `16777216` | Files above this are not managed at all |
 | `excludeGlobs` | `[]` | Matching paths always pass through |
 | `statsFile` | none | Optional cross-session totals file |
@@ -110,8 +110,8 @@ Every key, with its default:
 
 The plugin sits on the `tools/post-execute` interception point, dispatched by tool name:
 
-1. **read**: derives the window from the canonical value (path/offset/lines/totalLines); a stat-verified cache (mtime+size fast path + sha256) confirms the on-disk identity; then it takes one of three branches. Full coverage replaces the result with a dedupe marker (only the FIRST dedupe notice per file between two real messages — repeats are silent and their savings merge into the next message). Partial coverage or a hash change puts the missing/changed **lines into the durable tool result** (each line prefixed with `N: ` like native read, so `cancel` clearing the inbox can at worst drop the ledger notice — the next read treats the file as unmounted), leaving a head-only ledger notice on `additionalContexts`; on a hash change the stored line draft is diffed and only the changed lines are re-sent (unchanged lines just shift; a unique-line anchor splits an oversized LCS middle), falling back to a whole-window remount without a draft or for huge diffs. The first mount still keeps the native read body plus a head-only notice.
-2. **write**: the whole file is mounted as already known (free re-reads); the cached identity is invalidated.
+1. **read**: derives the window from the canonical value (path/offset/lines/totalLines); a stat-verified cache (mtime+size fast path + sha256) confirms the on-disk identity; then it takes one of three branches. Full coverage replaces the result with a dedupe marker (only the FIRST dedupe notice per file between two real messages — repeats are silent and their savings merge into the next message). Partial coverage or a hash change puts the missing/changed **lines into the durable tool result** (each line prefixed with `N: ` like native read, so `cancel` clearing the inbox can at worst drop the ledger notice — the next read treats the file as unmounted), leaving a head-only ledger notice on `additionalContexts`; on a hash change the stored line draft is diffed and only the changed lines are re-sent (unchanged lines just shift; a unique-line anchor splits an oversized LCS middle); capped files without a draft first try append detection (a prefix hash match keeps old coordinates and re-sends only the new tail, plus the old last line when the append extended it), and only otherwise fall back to a whole-window remount. The first mount still keeps the native read body plus a head-only notice. The line draft mirrors the read tool's splitting exactly (including UTF-8 BOM stripping and CRLF folding); fingerprints are 53-bit fast hashes kept in memory only (never persisted, never sent).
+2. **write**: the whole file is mounted as already known (free re-reads); the cached identity is invalidated. When the write canonical value carries the written content (`after`), it is fingerprinted and compared line-by-line with disk first: on a mismatch (e.g. a format-on-save hook rewrote the file) the file is NOT mounted and the next read anchors fresh — content the model never saw is never hidden.
 3. **edit**: marks the cached identity stale but keeps the line-fingerprint draft; the next read re-reads disk and remounts only the changed lines.
 4. Mount state travels as structured fields on injected message sources (standard `user/message` events), shared by resume replay and the browser fold through ONE merge rule (`mount-source.ts`).
 5. Compaction awareness: DSH's canonical checkpoints (source `{ kind: 'plugin', plugin: 'compact' }` with `sourceEventSeqs`) shadow stale mounts, which are then skipped.
@@ -124,7 +124,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 
 | Plugin | DSH |
 | --- | --- |
-| `0.5.1` | `0.1.5-rc.1` or later (verified on `0.1.5-rc.2`) |
+| `0.5.1`–`0.6.0` | `0.1.5-rc.1` or later (verified on `0.1.5-rc.2`) |
 | `≤0.5.0` | DSH from the `0.1.0-rc.5` line; no longer valid once `Session.events` was removed (0.1.2-alpha.4) |
 
 The plugin connects to contracts on both sides: the host's `tools/post-execute` interception point and the read/write/edit canonical values, plus the browser's slots (`conversation.view`) and session snapshot layout.
@@ -149,7 +149,7 @@ The plugin connects to contracts on both sides: the host's `tools/post-execute` 
 
 - **Why does the read card in the UI become a generic card?** The plugin replaces the model-visible result text at post-execute (dedupe marker / increment or remount body). The canonical value is preserved, but the card renders from the result text, so it degrades to the generic card.
 - **How do I keep the plugin away from some files?** Use `excludeGlobs` for a denylist (e.g. `**/node_modules/**`) and `maxManagedBytes` for a size ceiling; anything outside the list or over the ceiling passes through natively.
-- **Are the savings numbers accurate?** They are estimates: CJK 1 char ≈ 1 token, everything else 4 chars ≈ 1 token. The UI shows the net figure (saved − spent, floored at 0) and a rough CNY conversion at ≈ ¥1 per million tokens.
+- **Are the savings numbers accurate?** They are estimates: CJK 1 char ≈ 1 token, everything else 4 chars ≈ 1 token. The UI shows the net figure (saved − plugin overhead, where overhead covers notices, dedup/remount markers and expiry re-sends; floored at 0) and a rough CNY conversion at ≈ ¥1 per million tokens.
 - **How does the model force a re-read?** It calls `file_mount_forget` to invalidate that file's ledger entry, so the next read re-sends the whole file. The dedupe result says the same thing: forget first, then read, when the content is not in the conversation above.
 - **Where do cross-session totals live?** Configure `statsFile` and totals accumulate there; read them through `fileMount.stats()` (the UI for this is deferred).
 - **Installed, but there is no Mounted Files tab?** A directory install on Windows links to the wrong path and the plugin never reaches `dsh.profile.bundles`. Use the Release tarball or `pnpm dsh:install`, then restart the harness.
@@ -159,7 +159,7 @@ The plugin connects to contracts on both sides: the host's `tools/post-execute` 
 
 ```sh
 pnpm install
-pnpm test        # vitest (194 cases: units + real read/write loop integration + persistence round trip + compaction awareness + freshness + client components + install contract)
+pnpm test        # vitest (214 cases: units + real read/write loop integration + persistence round trip + compaction awareness + freshness + client components + install contract)
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown (lib/index.js / lib/client.js)
 pnpm dsh:install # pack a tarball into the local web profile (works on Windows; rebuilds when src is newer than the artifacts)
