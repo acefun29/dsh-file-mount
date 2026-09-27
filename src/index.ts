@@ -35,7 +35,7 @@ import { matchesAnyGlob } from './glob.ts'
 import { FileContentCache } from './file-cache.ts'
 import { fingerprintText } from './hash.ts'
 import { readFile, rename, writeFile } from 'node:fs/promises'
-import { inheritHistory, normalizeLedger, parseMountSource, pruneExpired } from './mount-source.ts'
+import { FILE_MOUNT_SOURCE_KIND, inheritHistory, normalizeLedger, parseMountSource, pruneExpired } from './mount-source.ts'
 import { displayPath, normalizeAbsPath } from './paths.ts'
 import { intersect, normalize, subtract, type LineRange } from './ranges.ts'
 import {
@@ -61,7 +61,8 @@ export {
   renderMountBlock,
   renderRemountMarker,
 } from './render.ts'
-export type { MountedFile, MountKind, MountSource, Segment } from './types.ts'
+export { FILE_MOUNT_SOURCE_KIND, isFileMountSource } from './mount-source.ts'
+export type { FileMountNoticeSource, MountedFile, MountKind, MountSource, Segment } from './types.ts'
 
 /** Plugin config: ledger limits and the global kill switch. */
 export interface Config {
@@ -255,12 +256,19 @@ export class FileMountService extends Service {
 
     this.registerForgetTool(ctx)
 
-    ctx.on('agent/session-start', ({ agent, source }) => {
+    // `agent/created` is serial and awaited before the agent accepts input, so
+    // the restore is only started here (storeFor awaits it on first use).
+    ctx.on('agent/created', (payload) => {
+      const { agent } = payload
+      // `source` joined this payload in DSH 0.1.6. On older hosts it is absent
+      // and the lazy restore in storeFor covers resumed sessions.
+      const source = (payload as { readonly source?: string }).source
       if (source === 'resume') void this.kickoffRestore(agent).catch(() => {})
-      // 'clear'/'compact' are declared in DSH's SessionStartSource union but not
-      // yet emitted by any harness code — defensive wiring until they are. The
-      // live checkpoint sweep (storeFor) covers compaction today.
+      // DSH declares 'clear' and 'compact' in SessionStartSource but only emits
+      // 'startup' and 'resume' (0.1.7). The live checkpoint sweep (storeFor)
+      // covers compaction.
       if (source === 'clear' || source === 'compact') this.resetLedger(agent)
+      return undefined
     })
 
     ctx.on('agent/disposed', ({ agent }) => this.disposeLedger(agent))
@@ -792,8 +800,7 @@ export class FileMountService extends Service {
     spentTokens: number,
   ): MountSource {
     return {
-      kind: 'plugin',
-      plugin: 'file-mount',
+      kind: FILE_MOUNT_SOURCE_KIND,
       form: 'notice',
       summary: this.mountSummary(mountKind, added, savedTokens),
       path: absPath,
@@ -983,7 +990,7 @@ export class FileMountService extends Service {
         ...downstream.additionalContexts ?? [],
         createUserMessage({
           content: [{ type: 'text', text: '[file-mount] the read result shape is not recognized — this plugin is passing reads through untouched. Update dsh-file-mount for this DSH version.' }],
-          source: { kind: 'plugin', plugin: 'file-mount', form: 'notice', summary: 'file-mount: read result shape not recognized — passing through' },
+          source: { kind: FILE_MOUNT_SOURCE_KIND, form: 'notice', summary: 'file-mount: read result shape not recognized — passing through' },
         }),
       ],
     }
@@ -1025,8 +1032,8 @@ export class FileMountService extends Service {
   }
 
   /**
-   * Fold the live log tail for new compact checkpoints (DSH does not emit a
-   * session-start 'compact' notification yet). Any new checkpoint — or a
+   * Fold the live log tail for new compact checkpoints (DSH does not emit an
+   * `agent/created` 'compact' notification yet). Any new checkpoint — or a
    * replaced/shrunk log — re-derives the ledger from the still-visible mount
    * messages, so a claim never outlives the content it cites.
    */

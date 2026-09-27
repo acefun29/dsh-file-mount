@@ -1,8 +1,9 @@
 /**
  * Compaction awareness: checkpoint recognition and shadowed-seq collection.
- * The checkpoint shape is duck-typed from DSH's canonical compaction marker
- * (user/message with source { kind: 'plugin', plugin: 'compact' }), so these
- * tests build plain event-shaped objects, not real session events.
+ * The checkpoint shape is duck-typed from DSH's compaction marker (a
+ * user/message whose source is { kind: 'compact-checkpoint' } since DSH 0.1.7,
+ * { kind: 'plugin', plugin: 'compact' } before), so these tests build plain
+ * event-shaped objects, not real session events.
  */
 import { describe, expect, it } from 'vitest'
 import { isCompactCheckpoint, shadowedSeqsOf } from '../src/compaction.ts'
@@ -17,8 +18,25 @@ function checkpoint(sourceEventSeqs?: unknown): Record<string, unknown> {
 }
 
 describe('isCompactCheckpoint', () => {
-  it('recognizes the canonical compact source on a user/message', () => {
+  it('recognizes the v3 compact source on a user/message', () => {
     expect(isCompactCheckpoint(checkpoint())).toBe(true)
+  })
+
+  it('recognizes the DSH 0.1.7 compact-checkpoint source on a user/message', () => {
+    expect(isCompactCheckpoint({
+      type: 'user/message',
+      seq: 4,
+      data: { source: { kind: 'compact-checkpoint', compactionId: 'cmp-1' } },
+      sourceEventSeqs: [1, 2],
+    })).toBe(true)
+    // A v3 log migrated to v4 carries the bare renamed kind.
+    expect(isCompactCheckpoint({ type: 'user/message', data: { source: { kind: 'compact-checkpoint' } } })).toBe(true)
+  })
+
+  it('rejects compact-checkpoint on other event types and near-miss kinds', () => {
+    expect(isCompactCheckpoint({ type: 'assistant/message', data: { source: { kind: 'compact-checkpoint' } } })).toBe(false)
+    expect(isCompactCheckpoint({ type: 'user/message', data: { source: { kind: 'plugin:compact' } } })).toBe(false)
+    expect(isCompactCheckpoint({ type: 'user/message', data: { source: { kind: 'compact-basic' } } })).toBe(false)
   })
 
   it('rejects foreign sources, other types, and malformed shapes', () => {
@@ -48,6 +66,14 @@ describe('shadowedSeqsOf', () => {
       checkpoint(undefined),
     ])
     expect([...seqs].sort((x, y) => x - y)).toEqual([0, 4])
+  })
+
+  it('collects the seqs shadowed by a DSH 0.1.7 checkpoint', () => {
+    const seqs = shadowedSeqsOf([
+      { type: 'user/message', seq: 1, data: { source: { kind: 'file-mount' } } },
+      { type: 'user/message', seq: 5, data: { source: { kind: 'compact-checkpoint', compactionId: 'cmp-1' } }, sourceEventSeqs: [1, 2, 3] },
+    ])
+    expect([...seqs].sort((x, y) => x - y)).toEqual([1, 2, 3])
   })
 
   it('returns an empty set when no checkpoint exists', () => {

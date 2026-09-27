@@ -14,12 +14,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { normalizeAbsPath } from '../src/paths.ts'
-import { harness, MockAdapter, textResponse, toolCallResponse, waitForIdle } from './harness.ts'
+import { harness, MockAdapter, textResponse, toolCallResponse, toolResultText, waitForIdle } from './harness.ts'
+import { isFileMountSource } from '../src/mount-source.ts'
 
 function send(agent: Agent, text: string): void {
   agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
@@ -31,7 +32,7 @@ function mountMessages(agent: Agent) {
     .filter((event) => event.type === 'user/message')
     .map((event) => event.data.source)
     .filter((source) => typeof source === 'object' && source !== null
-      && source['kind'] === 'plugin' && source['plugin'] === 'file-mount') as unknown as Record<string, unknown>[]
+      && isFileMountSource(source)) as unknown as Record<string, unknown>[]
 }
 
 /** Geometry-only view of mounted segments (freshness meta ignored). */
@@ -41,13 +42,7 @@ function geo(segs: readonly { start: number; end: number }[]): { start: number; 
 
 /** The tool/result content text for one call id. */
 function resultText(agent: Agent, callId: string): string | undefined {
-  const event = agent.session.snapshotEvents().find((e) => e.type === 'tool/result' && e.data.message.content[0]?.toolCallId === ToolCallId(callId))
-  if (event === undefined || event.type !== 'tool/result') return undefined
-  const block = event.data.message.content[0]
-  if (block === undefined) return undefined
-  return block.content
-    .map((item) => item.type === 'text' ? item.text : '')
-    .join('')
+  return toolResultText(agent, callId)
 }
 
 

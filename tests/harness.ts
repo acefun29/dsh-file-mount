@@ -5,12 +5,13 @@
  * packages/core/agent-loop/tests/interception.spec.ts in the harness repo).
  */
 import { Context } from '@deepseek-ai/cordis'
-import type { GenerateOptions, LlmModelReasoningInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmModelReasoningInfo, LlmResolvedModelInfo, MessageSource, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { ToolCallId, LlmAdapter, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import FsLocal from '@deepseek-ai/dsh-fs-local'
@@ -113,3 +114,24 @@ export function waitForIdle(ctx: Context, agent: { readonly id: unknown }): Prom
     })
   })
 }
+
+/**
+ * The tool/result text for one call id. DSH 0.1.7 stores the call id on the
+ * tool message and the text blocks directly in its content; DSH 0.1.6 wraps
+ * them in one `tool-result` block carrying the call id.
+ */
+export function toolResultText(agent: Agent, callId: string): string | undefined {
+  for (const event of agent.session.snapshotEvents()) {
+    if (event.type !== 'tool/result') continue
+    const message = event.data.message as unknown as { toolCallId?: string; content: readonly Record<string, unknown>[] }
+    const first = message.content[0]
+    const wrapped = first?.['type'] === 'tool-result' && first['toolCallId'] === callId
+    if (message.toolCallId !== callId && !wrapped) continue
+    const blocks = (wrapped ? first['content'] : message.content) as readonly Record<string, unknown>[]
+    return blocks.map((item) => item['type'] === 'text' ? item['text'] as string : '').join('')
+  }
+  return undefined
+}
+
+/** Source of a compaction checkpoint as DSH 0.1.7 writes it. */
+export const COMPACT_CHECKPOINT_SOURCE = { kind: 'compact-checkpoint', compactionId: 'test-compaction' } as unknown as MessageSource

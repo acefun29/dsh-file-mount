@@ -3,8 +3,8 @@
  * canonical checkpoint shape, so the plugin needs no dsh-compaction peer).
  *
  * DSH compacts a session at the SURFACE layer: one `user/message` checkpoint
- * (canonical source `{ kind: 'plugin', plugin: 'compact' }`) replaces the
- * shadowed range, and its event-level `sourceEventSeqs` lists every shadowed
+ * (source `{ kind: 'compact-checkpoint' }` since DSH 0.1.7, formerly
+ * `{ kind: 'plugin', plugin: 'compact' }`) replaces the shadowed range, and its event-level `sourceEventSeqs` lists every shadowed
  * event. Shadowed events stay in the raw log, so a ledger that folds the log
  * must skip them: a mount claim from a shadowed message no longer holds,
  * because the model context no longer contains that content. Deduping against
@@ -16,8 +16,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * True when an event is the canonical compaction checkpoint: a
- * `user/message` whose source is the plugin 'compact' marker.
+ * True when an event is a compaction checkpoint: a `user/message` whose source
+ * is `{ kind: 'compact-checkpoint' }` (DSH 0.1.7 writer, and v3 logs migrated
+ * to v4, where DSH renames the `compact` plugin wrapper to this kind) or the
+ * v3 wrapper `{ kind: 'plugin', plugin: 'compact' }` (DSH 0.1.6 and earlier).
  */
 export function isCompactCheckpoint(event: unknown): boolean {
   if (!isRecord(event)) return false
@@ -25,7 +27,9 @@ export function isCompactCheckpoint(event: unknown): boolean {
   const data = event['data']
   if (!isRecord(data)) return false
   const source = data['source']
-  return isRecord(source) && source['kind'] === 'plugin' && source['plugin'] === 'compact'
+  if (!isRecord(source)) return false
+  return source['kind'] === 'compact-checkpoint'
+    || (source['kind'] === 'plugin' && source['plugin'] === 'compact')
 }
 
 /**

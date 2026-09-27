@@ -19,7 +19,8 @@ import { hashBuffer } from '../src/hash.ts'
 import { normalizeAbsPath } from '../src/paths.ts'
 import { markerHead } from '../src/render.ts'
 import { estimateTokens } from '../src/tokens.ts'
-import { harness, MockAdapter, textResponse, toolCallResponse, waitForIdle } from './harness.ts'
+import { COMPACT_CHECKPOINT_SOURCE, harness, MockAdapter, textResponse, toolCallResponse, toolResultText, waitForIdle } from './harness.ts'
+import { isFileMountSource } from '../src/mount-source.ts'
 
 /** Text chunks with a controllable input-token usage (freshness clock). */
 function textWithUsage(text: string, inputTokens: number): StreamChunk[] {
@@ -52,7 +53,7 @@ function mountMessages(agent: Agent) {
     .filter((event) => event.type === 'user/message')
     .map((event) => event.data.source)
     .filter((source) => typeof source === 'object' && source !== null
-      && source['kind'] === 'plugin' && source['plugin'] === 'file-mount') as unknown as Record<string, unknown>[]
+      && isFileMountSource(source)) as unknown as Record<string, unknown>[]
 }
 
 /** Geometry-only view of mounted segments (freshness meta ignored). */
@@ -61,13 +62,7 @@ function geo(segs: readonly { start: number; end: number }[]): { start: number; 
 }
 /** The tool/result content text for one call id. */
 function resultText(agent: Agent, callId: string): string | undefined {
-  const event = agent.session.snapshotEvents().find((e) => e.type === 'tool/result' && e.data.message.content[0]?.toolCallId === ToolCallId(callId))
-  if (event === undefined || event.type !== 'tool/result') return undefined
-  const block = event.data.message.content[0]
-  if (block === undefined) return undefined
-  return block.content
-    .map((item) => item.type === 'text' ? item.text : '')
-    .join('')
+  return toolResultText(agent, callId)
 }
 
 describe('file-mount integration', () => {
@@ -197,7 +192,9 @@ describe('file-mount integration', () => {
 
     const off = ctx.on('session/event', (session, event) => {
       if (session !== agent.session) return
-      if (event.type === 'tool/result' && event.data.message.content[0]?.toolCallId === ToolCallId('c2')) {
+      if (event.type !== 'tool/result') return
+      const message = event.data.message as unknown as { toolCallId?: string; content: readonly { toolCallId?: string }[] }
+      if (message.toolCallId === 'c2' || message.content[0]?.toolCallId === 'c2') {
         agent.cancel({ kind: 'user' })
       }
     })
@@ -343,8 +340,9 @@ describe('file-mount integration', () => {
     const seed = createUserMessage({
       content: [{ type: 'text', text: '[file-mount: seed]' }],
       source: {
-        kind: 'plugin',
-        plugin: 'file-mount',
+        kind: 'file-mount',
+        form: 'notice',
+        summary: 'seed',
         path: normalizeAbsPath(file),
         hash: hashBuffer(await readFile(file)),
         totalLines: 6,
@@ -382,7 +380,7 @@ describe('file-mount integration', () => {
     await waitForIdle(ctx, agent)
 
     const mountEvent = agent.session.snapshotEvents().find((event) => event.type === 'user/message'
-      && (event.data.source as unknown as Record<string, unknown> | null)?.['plugin'] === 'file-mount')
+      && isFileMountSource(event.data.source))
     expect(mountEvent).toBeDefined()
     const highUsage = agent.session.snapshotEvents().filter((event) => {
       if (event.type !== 'assistant/message') return false
@@ -393,7 +391,7 @@ describe('file-mount integration', () => {
     expect(highUsage.length).toBeGreaterThan(0)
     agent.session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: '[compact checkpoint]' }],
-      source: { kind: 'plugin', plugin: 'compact' },
+      source: COMPACT_CHECKPOINT_SOURCE,
     }), { surfaceOp: 'append', sourceEventSeqs: highUsage.map((event) => event.seq) })
 
     send(agent, 'read it again')
@@ -459,11 +457,11 @@ describe('file-mount integration', () => {
 
     // The anchor's state message is now shadowed by a compaction checkpoint.
     const mountEvent = agent.session.snapshotEvents().find((event) => event.type === 'user/message'
-      && (event.data.source as unknown as Record<string, unknown> | null)?.['plugin'] === 'file-mount')
+      && isFileMountSource(event.data.source))
     expect(mountEvent).toBeDefined()
     agent.session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: '[compact checkpoint]' }],
-      source: { kind: 'plugin', plugin: 'compact' },
+      source: COMPACT_CHECKPOINT_SOURCE,
     }), { surfaceOp: 'append', sourceEventSeqs: [mountEvent!.seq] })
 
     send(agent, 'read it again')
@@ -487,8 +485,9 @@ describe('file-mount integration', () => {
     const seed = createUserMessage({
       content: [{ type: 'text', text: '[file-mount: seed]' }],
       source: {
-        kind: 'plugin',
-        plugin: 'file-mount',
+        kind: 'file-mount',
+        form: 'notice',
+        summary: 'seed',
         path: normalizeAbsPath(file),
         hash: hashBuffer(await readFile(file)),
         totalLines: 6,
@@ -500,7 +499,7 @@ describe('file-mount integration', () => {
     const seedEvent = agent.session.append('user/message', seed, { surfaceOp: 'append' })
     agent.session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: '[compact checkpoint]' }],
-      source: { kind: 'plugin', plugin: 'compact' },
+      source: COMPACT_CHECKPOINT_SOURCE,
     }), { surfaceOp: 'append', sourceEventSeqs: [seedEvent.seq] })
 
     send(agent, 'read it')
@@ -532,9 +531,9 @@ describe('file-mount integration', () => {
     const handle = await ctx2.sessionPersistence.open(sessionId, 'read')
     const inspection = await handle.read()
     const mountEvents = inspection.events.filter((event) => event.type === 'user/message'
-      && typeof event.data.source === 'object' && event.data.source !== null
-      && event.data.source['plugin'] === 'file-mount')
+      && isFileMountSource(event.data.source))
     expect(mountEvents.length).toBe(1)
+    expect((mountEvents[0]!.data.source as unknown as Record<string, unknown>)['kind']).toBe('file-mount')
 
     const replayed = new MountStore()
     replayed.replay(mountEvents.map((event) => ({ type: event.type, source: event.data.source })))
