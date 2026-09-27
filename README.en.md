@@ -124,7 +124,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 
 | Plugin | DSH |
 | --- | --- |
-| `main` (unreleased) | `0.1.5-rc.1` or later, including the session format v4 of `0.1.7` (verified on `0.1.7-rc.2`) |
+| `0.7.0` | `0.1.5-rc.1` or later, including the session format v4 of `0.1.7` (verified on `0.1.7-rc.2`) |
 | `0.5.1`–`0.6.0` | `0.1.5-rc.1` or later (verified on `0.1.5-rc.2`) |
 | `≤0.5.0` | DSH from the `0.1.0-rc.5` line; no longer valid once `Session.events` was removed (0.1.2-alpha.4) |
 
@@ -160,7 +160,7 @@ The plugin connects to contracts on both sides: the host's `tools/post-execute` 
 
 ```sh
 pnpm install
-pnpm test        # vitest (214 cases: units + real read/write loop integration + persistence round trip + compaction awareness + freshness + client components + install contract)
+pnpm test        # vitest (229 cases: units + real read/write loop integration + persistence round trip + compaction awareness + freshness + client components + install contract)
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown (lib/index.js / lib/client.js)
 pnpm dsh:install # pack a tarball into the local web profile (works on Windows; rebuilds when src is newer than the artifacts)
