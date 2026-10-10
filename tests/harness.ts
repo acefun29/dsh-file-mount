@@ -25,6 +25,10 @@ export interface HarnessOptions {
   enabled?: boolean
   /** Extra plugin config (e.g. minSavedTokens). */
   config?: Config
+  /** Runs after the tooling plugins but BEFORE the file-mount plugin, so a
+   * listener registered here is inner relative to the plugin's own
+   * post-execute handler (next() inside the plugin reaches it first). */
+  injectListener?: (ctx: Context) => void
 }
 
 /** Scripted adapter: each model call consumes the next script entry. */
@@ -103,6 +107,10 @@ export async function harness(adapter: MockAdapter, options: HarnessOptions): Pr
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(LocalFileSystem, { cwd: options.cwd })
   await ctx.plugin(toolFs, {})
+  // Tests that must see or alter what the plugin's own post-execute handler
+  // observes (shape drift) register their listener BEFORE the plugin, so it
+  // sits inner in the waterfall — next() inside the plugin runs it.
+  options.injectListener?.(ctx)
   await ctx.plugin(fileMountApply, { enabled: options.enabled ?? true, ...options.config })
   ctx.llm.registerAdapter(['mock'], adapter)
   return ctx

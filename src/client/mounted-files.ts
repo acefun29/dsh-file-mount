@@ -50,7 +50,8 @@ export interface MountedFileView {
   seq: number
   /** Current context length (latest request input tokens), for freshness. */
   contextL?: number
-  /** Freshness expiry threshold the host configured (default 0.6). */
+  /** Freshness expiry threshold for display (the plugin's default; the host
+   * no longer writes its configured value into the message source). */
   freshnessThreshold: number
 }
 
@@ -158,8 +159,6 @@ export class MountFold {
   private sessionId: string | undefined
   private readonly paths = new Map<string, StoredMount[]>()
   private readonly folded = new Set<number>()
-  private lastThreshold: number = DEFAULT_FRESHNESS_CONFIG.threshold
-  private lastThresholdSeq = -1
   /**
    * Fold one snapshot revision (ascending seq) into the persistent state.
    * @param sessionId - owning conversation; a change resets the fold.
@@ -171,8 +170,6 @@ export class MountFold {
       this.sessionId = sessionId
       this.paths.clear()
       this.folded.clear()
-      this.lastThreshold = DEFAULT_FRESHNESS_CONFIG.threshold
-      this.lastThresholdSeq = -1
     }
     let contextL: number | undefined
     for (const node of nodes) {
@@ -183,13 +180,6 @@ export class MountFold {
       if (parsed === undefined) continue
       if (this.folded.has(node.seq)) continue
       this.folded.add(node.seq)
-      if (isRecord(node.source) && typeof node.source['freshnessThreshold'] === 'number') {
-        const threshold = node.source['freshnessThreshold'] as number
-        if (node.seq > this.lastThresholdSeq) {
-          this.lastThresholdSeq = node.seq
-          this.lastThreshold = threshold
-        }
-      }
       const list = this.paths.get(parsed.path) ?? []
       list.push({ seq: node.seq, kind: parsed.mountKind, delta: parsed.delta })
       list.sort((a, b) => a.seq - b.seq)
@@ -210,7 +200,7 @@ export class MountFold {
         ranges: state.segments,
         savedTokens: state.savedTokens,
         spentTokens: state.spentTokens,
-        freshnessThreshold: this.lastThreshold,
+        freshnessThreshold: DEFAULT_FRESHNESS_CONFIG.threshold,
       })
     }
     views.sort((a, b) => a.seq - b.seq)

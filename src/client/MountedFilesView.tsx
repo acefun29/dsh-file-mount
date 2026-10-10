@@ -10,6 +10,7 @@ import {
   freshnessLevel,
   worstFreshness,
 } from './mounted-files.ts'
+import { DEFAULT_FRESHNESS_CONFIG } from '../mount-source.ts'
 import { formatRange } from '../render.ts'
 import css from './MountedFilesView.module.css'
 
@@ -104,7 +105,7 @@ export function MountedFilesView({ useConversation, useSession, viewRequest, com
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const rootRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.6
+  const foldedThreshold = mounts[0]?.freshnessThreshold ?? DEFAULT_FRESHNESS_CONFIG.threshold
   // DSH 0.2.0 added a one-shot focus request to the `conversation.view` owner
   // props. The shell keeps it in the session store until the addressed View
   // acknowledges, so a registrant that ignores it leaves the request pending

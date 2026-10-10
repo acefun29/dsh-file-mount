@@ -100,6 +100,9 @@ describe('written source', () => {
     expect(Object.hasOwn(sources[0]!, 'plugin')).toBe(false)
     expect(sources[0]!['form']).toBe('notice')
     expect(typeof sources[0]!['summary']).toBe('string')
+    // Slimmed member set: the retired display-only member is never written
+    // (see tests/degradation.spec.ts for the full contract).
+    expect(Object.hasOwn(sources[0]!, 'freshnessThreshold')).toBe(false)
     await ctx.fiber.dispose()
   })
 

@@ -123,6 +123,14 @@ export const Config: z<Config> = z.object({
 })
 export const name = 'file-mount'
 
+/**
+ * The DSH release this build is verified against (0.2.0-rc.2 desktop line).
+ * Keep in sync with `engines.dsh` / the `@deepseek-ai/dsh*` peer ranges in
+ * package.json (asserted by tests/incompat.spec.ts); the version is quoted in
+ * the incompatible-shape notice so a drift report carries the tested baseline.
+ */
+export const DSH_COMPAT_VERSION = '0.2.0-rc.2'
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Live mount service: per-session ledgers plus the shared file cache. */
@@ -210,8 +218,10 @@ export class FileMountService extends Service {
   private readonly cursors = new Map<string, number>()
   /** Per-session pin LRU: agent id -> mounted paths, most recent last. */
   private readonly pinOrders = new Map<string, string[]>()
-  /** Emit the incompatible-read warning at most once per process. */
-  private compatWarned = false
+  /** Emit the incompatible-shape warning at most once per session so a
+   * silently disabled plugin is at least voiced once (a new session can warn
+   * again; cleared with the rest of the per-session state). */
+  private readonly compatWarned = new Map<string, boolean>()
   /** Per-session silent-dedup accounting waiting to ride the next real message. */
   private readonly pendingDedup = new Map<string, Map<string, { saved: number; spent: number }>>()
   /** Per-session current context length (latest request FULL prompt tokens:
@@ -282,10 +292,7 @@ export class FileMountService extends Service {
       if (exec.agent === undefined || result.isError) return downstream
       if (exec.name === 'read') return this.onReadResult(exec.agent, result, downstream)
       if (exec.name === 'write') return this.onWriteResult(exec.agent, result, downstream)
-      if (exec.name === 'edit') {
-        this.onEditResult(exec.agent, result.value)
-        return downstream
-      }
+      if (exec.name === 'edit') return this.onEditResult(exec.agent, result.value, downstream)
       return downstream
     })
   }
@@ -301,7 +308,7 @@ export class FileMountService extends Service {
     if (value === undefined) {
       // The read result no longer matches the v1 contract (read tool schema
       // changed?): surface a one-time warning instead of silently passing through.
-      return this.warnIncompat(downstream)
+      return this.warnIncompat(agent, 'read', downstream)
     }
     if (value.lines.length === 0
       || !Number.isSafeInteger(value.offset) || value.offset < 1) return downstream
@@ -357,8 +364,13 @@ export class FileMountService extends Service {
     result: ToolExecutionResult,
     downstream: Extract<PostToolDecision, { kind: 'accept' }>,
   ): Promise<PostToolDecision> {
+    if (result.value === undefined) return downstream
     const writeValue = asWriteValue(result.value)
-    if (writeValue === undefined) return downstream
+    if (writeValue === undefined) {
+      // Same guard as read: a renamed canonical field would silently disable
+      // the write-to-known mount, so voice it once per session.
+      return this.warnIncompat(agent, 'write', downstream)
+    }
     const absPath = normalizeAbsPath(writeValue.path)
     this.cache.invalidate(absPath)
     this.clearValveCount(agent.id, absPath)
@@ -400,9 +412,13 @@ export class FileMountService extends Service {
   /** An edit changes only a region, so the whole file is NOT known: mark
    * the cache stale but keep the line-fingerprint draft so the next read
    * re-reads disk and remounts only the changed lines (plan item 9). */
-  private onEditResult(agent: Agent | undefined, value: unknown): void {
+  private onEditResult(agent: Agent | undefined, value: unknown, downstream: Extract<PostToolDecision, { kind: 'accept' }>): PostToolDecision {
     const path = asPathValue(value)
-    if (path === undefined) return
+    if (path === undefined) {
+      // An edit value without a path is not a shape this plugin knows: warn
+      // once per session (same contract as read/write) instead of staying silent.
+      return agent === undefined ? downstream : this.warnIncompat(agent, 'edit', downstream)
+    }
     const absPath = normalizeAbsPath(path)
     this.cache.markStale(absPath)
     if (agent !== undefined) {
@@ -412,6 +428,7 @@ export class FileMountService extends Service {
       for (const perAgent of this.valveCounts.values()) perAgent.delete(absPath)
       for (const perAgent of this.pendingDedup.values()) perAgent.delete(absPath)
     }
+    return downstream
   }
 
   private getValveCount(agentId: string, absPath: string): number {
@@ -811,7 +828,6 @@ export class FileMountService extends Service {
       mountKind,
       savedTokens,
       spentTokens,
-      freshnessThreshold: this.freshnessThreshold,
     }
   }
 
@@ -953,6 +969,7 @@ export class FileMountService extends Service {
     this.restores.delete(id)
     this.contextL.delete(id)
     this.valveCounts.delete(id)
+    this.compatWarned.delete(id)
     if (store !== undefined) {
       this.flushPendingDedup(id, store)
       void this.persistStats(store)
@@ -980,17 +997,22 @@ export class FileMountService extends Service {
     }
   }
 
-  /** One-time warning when the read result shape is no longer recognized. */
-  private warnIncompat(downstream: Extract<PostToolDecision, { kind: 'accept' }>): PostToolDecision {
-    if (this.compatWarned) return downstream
-    this.compatWarned = true
+  /** One-time (per session) warning when a tool result shape is no longer
+   * recognized: without it a DSH upgrade that renames the canonical value
+   * fields would silently turn this plugin off. */
+  private warnIncompat(agent: Agent, tool: string, downstream: Extract<PostToolDecision, { kind: 'accept' }>): PostToolDecision {
+    if (this.compatWarned.get(agent.id) === true) return downstream
+    this.compatWarned.set(agent.id, true)
+    // The session-format version is read live: it stays diagnostic even when
+    // the build's tested DSH baseline is outdated.
+    const format = agent.session.header.version
     return {
       ...downstream,
       additionalContexts: [
         ...downstream.additionalContexts ?? [],
         createUserMessage({
-          content: [{ type: 'text', text: '[file-mount] the read result shape is not recognized — this plugin is passing reads through untouched. Update dsh-file-mount for this DSH version.' }],
-          source: { kind: FILE_MOUNT_SOURCE_KIND, form: 'notice', summary: 'file-mount: read result shape not recognized — passing through' },
+          content: [{ type: 'text', text: `[file-mount] the ${tool} result shape is not recognized (DSH ${DSH_COMPAT_VERSION}, session format v${format}) — this plugin is passing ${tool} results through untouched. Update dsh-file-mount for this DSH version.` }],
+          source: { kind: FILE_MOUNT_SOURCE_KIND, form: 'notice', summary: `file-mount: ${tool} shape not recognized (DSH ${DSH_COMPAT_VERSION}) — passing through` },
         }),
       ],
     }
@@ -1213,6 +1235,9 @@ export class FileMountService extends Service {
     // pendingDedup deliberately survives: the parked amounts ride the next
     // mount message's source, keeping one carrier for both ledger halves.
     this.valveCounts.delete(agent.id)
+    // The shape warning re-arms after a compaction re-fold (at most one per
+    // checkpoint): a long session cut in half gets the signal again.
+    this.compatWarned.delete(agent.id)
   }
   /** Replay the ledger from plugin-injected message sources in the live log. */
   private kickoffRestore(agent: Agent): Promise<void> {
@@ -1244,6 +1269,7 @@ export class FileMountService extends Service {
     this.pendingDedup.delete(agent.id)
     this.contextL.delete(agent.id)
     this.valveCounts.delete(agent.id)
+    this.compatWarned.delete(agent.id)
   }
   /** Live ledger snapshot for UIs and tests. */
   ledger(agent: Agent): MountedFile[] {

@@ -126,6 +126,7 @@ npx --yes @deepseek-ai/dsh plugin --profile web add "file:$Tgz"
 
 | 插件版本 | DSH |
 | --- | --- |
+| `0.8.1` | `0.2.0-rc.2`（桌面版线；账本 source 成员瘦身以缓解格式升级拒载风险，并给 read/write/edit 的形状漂移加每会话一次告警） |
 | `0.8.0` | `0.2.0-rc.2`（桌面版线；`peerDependencies` 声明 `^0.2.0-rc.2`，类型检查 / 单测 / 构建与产物级客户端冒烟均已核验，并把构建产物装进桌面 profile 比对哈希） |
 | `0.7.0` | `0.1.5-rc.1` 及以上，包括 `0.1.7` 的会话格式 v4（在 `0.1.7-rc.2` 上实测） |
 | `0.5.1`–`0.6.0` | `0.1.5-rc.1` 及以上（在 `0.1.5-rc.2` 上实测） |
@@ -163,7 +164,7 @@ npx --yes @deepseek-ai/dsh plugin --profile web add "file:$Tgz"
 
 ```sh
 pnpm install
-pnpm test        # vitest（229 用例：单元 + 真实 read/write 循环集成 + 持久化往返 + 压缩感知 + 新鲜度 + 客户端组件 + 安装契约）
+pnpm test        # vitest（242 用例：单元 + 真实 read/write 循环集成 + 持久化往返 + 压缩感知 + 新鲜度 + 客户端组件 + 安装契约 + 账本降级契约 + 形状守卫）
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown（lib/index.js / lib/client.js）
 pnpm dsh:install # 打包 tarball 并装进本机 web profile（Windows 可用；源码比产物新时会自动重建）

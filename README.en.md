@@ -124,6 +124,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 
 | Plugin | DSH |
 | --- | --- |
+| `0.8.1` | `0.2.0-rc.2` (desktop line; slims the ledger source members to mitigate format-bump rejection, and adds a once-per-session notice when a read/write/edit result shape drifts) |
 | `0.8.0` | `0.2.0-rc.2` (desktop line; `peerDependencies` declare `^0.2.0-rc.2`; type check, unit tests, build and an artifact-level client smoke all verified, with the built artifact compared by SHA-256 inside the desktop profile) |
 | `0.7.0` | `0.1.5-rc.1` or later, including the session format v4 of `0.1.7` (verified on `0.1.7-rc.2`) |
 | `0.5.1`–`0.6.0` | `0.1.5-rc.1` or later (verified on `0.1.5-rc.2`) |
@@ -161,7 +162,7 @@ The plugin connects to contracts on both sides: the host's `tools/post-execute` 
 
 ```sh
 pnpm install
-pnpm test        # vitest (229 cases: units + real read/write loop integration + persistence round trip + compaction awareness + freshness + client components + install contract)
+pnpm test        # vitest (242 cases: units + real read/write loop integration + persistence round trip + compaction awareness + freshness + client components + install contract + ledger degradation contract + shape guard)
 pnpm typecheck   # tsc --noEmit
 pnpm run build   # tsc + tsdown (lib/index.js / lib/client.js)
 pnpm dsh:install # pack a tarball into the local web profile (works on Windows; rebuilds when src is newer than the artifacts)

@@ -7,6 +7,7 @@ import {
   freshnessLevel,
   worstFreshness,
 } from '../../src/client/mounted-files.ts'
+import { DEFAULT_FRESHNESS_CONFIG } from '../../src/mount-source.ts'
 
 function contextNode(source: Record<string, unknown>, seq = 1, time = 1000): ContextMessageNode {
   return {
@@ -180,13 +181,26 @@ describe('foldMounts freshness', () => {
       assistantNode(1, 200),
       contextNode(mountSource({
         mounted: [{ start: 1, end: 50, born: 150, expired: 1 }],
-        freshnessThreshold: 0.5,
       }), 2),
       assistantNode(3, 400),
     ])
     expect(mounts[0]!.contextL).toBe(400)
-    expect(mounts[0]!.freshnessThreshold).toBe(0.5)
+    // The host no longer writes its configured threshold into the source; the
+    // view shows the plugin's display default regardless.
+    expect(mounts[0]!.freshnessThreshold).toBe(DEFAULT_FRESHNESS_CONFIG.threshold)
     expect(mounts[0]!.ranges).toEqual([{ start: 1, end: 50, born: 150, expired: 1 }])
+  })
+
+  it('ignores a legacy source threshold: display stays on the plugin default', () => {
+    // Old sessions may still carry freshnessThreshold; it must not influence
+    // the fold now that the field is retired.
+    const mounts = foldMounts([
+      contextNode(mountSource({
+        mounted: [{ start: 1, end: 50, born: 5, expired: 0 }],
+        freshnessThreshold: 0.5,
+      }), 2),
+    ])
+    expect(mounts[0]!.freshnessThreshold).toBe(DEFAULT_FRESHNESS_CONFIG.threshold)
   })
 
   it('counts cached input in the context length (uncached + cacheRead)', () => {

@@ -99,10 +99,10 @@ export interface MountSource extends FileMountNoticeSource {
   /** Tokens this decision kept out of the context (0 for new/remount). */
   savedTokens: number
   /** Plugin overhead carried by this decision (notice + marker text +
-   * expiry re-sent bodies). */
+   * expiry re-sent bodies). Kept durable: the exact per-message overhead
+   * (including parked silent-dedup amounts) cannot be reconstructed from the
+   * log alone, and the cross-session stats file depends on it. */
   spentTokens: number
-  /** Freshness expiry threshold the host configured (for the browser fold). */
-  freshnessThreshold?: number
 }
 
 declare module '@deepseek-ai/dsh-llm' {
