@@ -47,6 +47,14 @@ function send(agent: Agent, text: string): void {
   agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
 }
 
+/**
+ * `data.source` is absent from some persisted event variants, so read it
+ * structurally instead of off the raw event union.
+ */
+function eventSource(event: { data: unknown }): unknown {
+  return (event.data as { source?: unknown }).source
+}
+
 /** All file-mount injected messages in the log, in order. */
 function mountMessages(agent: Agent) {
   return agent.session.snapshotEvents()
@@ -118,7 +126,7 @@ describe('file-mount integration', () => {
     // The dedup decision also leaves a short note message in the log.
     const dedupNote = agent.session.snapshotEvents().find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
-      && e.data.source['mountKind'] === 'dedup')
+      && (e.data.source as unknown as Record<string, unknown>)['mountKind'] === 'dedup')
     expect(dedupNote !== undefined && dedupNote.type === 'user/message'
       && dedupNote.data.content[0] !== undefined && dedupNote.data.content[0].type === 'text'
       ? dedupNote.data.content[0].text
@@ -132,7 +140,7 @@ describe('file-mount integration', () => {
     // The injected increment message is a ledger declaration, not the body.
     const increment = agent.session.snapshotEvents().find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
-      && e.data.source['mountKind'] === 'increment')
+      && (e.data.source as unknown as Record<string, unknown>)['mountKind'] === 'increment')
     const incrementText = increment !== undefined && increment.type === 'user/message'
       && increment.data.content[0] !== undefined && increment.data.content[0].type === 'text'
       ? increment.data.content[0].text
@@ -310,7 +318,7 @@ describe('file-mount integration', () => {
 
     const remount = agent.session.snapshotEvents().find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
-      && e.data.source['mountKind'] === 'remount')
+      && (e.data.source as unknown as Record<string, unknown>)['mountKind'] === 'remount')
     const remountText = remount !== undefined && remount.type === 'user/message'
       && remount.data.content[0] !== undefined && remount.data.content[0].type === 'text'
       ? remount.data.content[0].text
@@ -531,12 +539,12 @@ describe('file-mount integration', () => {
     const handle = await ctx2.sessionPersistence.open(sessionId, 'read')
     const inspection = await handle.read()
     const mountEvents = inspection.events.filter((event) => event.type === 'user/message'
-      && isFileMountSource(event.data.source))
+      && isFileMountSource(eventSource(event)))
     expect(mountEvents.length).toBe(1)
-    expect((mountEvents[0]!.data.source as unknown as Record<string, unknown>)['kind']).toBe('file-mount')
+    expect((eventSource(mountEvents[0]!) as Record<string, unknown>)['kind']).toBe('file-mount')
 
     const replayed = new MountStore()
-    replayed.replay(mountEvents.map((event) => ({ type: event.type, source: event.data.source })))
+    replayed.replay(mountEvents.map((event) => ({ type: event.type, source: eventSource(event) })))
     expect(geo(replayed.mountedSegments(normalizeAbsPath(file)))).toEqual([{ start: 1, end: 2 }])
 
   })
@@ -1047,7 +1055,7 @@ describe('file-mount integration', () => {
     // Simulate a backend/hook that rewrites the content on its way to disk but
     // still reports the pre-format text in the outcome (so value.after shows
     // what the MODEL wrote while disk holds something else).
-    const fsSvc = ctx.get('fs') as {
+    const fsSvc = ctx.get('fs') as unknown as {
       writeText: (target: unknown, content: string, ...rest: unknown[]) => Promise<Record<string, unknown>>
     }
     const origWrite = fsSvc.writeText.bind(fsSvc)

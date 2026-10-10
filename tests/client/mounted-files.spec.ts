@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationNode, ContextMessageNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import {
   conversationNodes,
   MountFold,
@@ -15,7 +15,9 @@ function contextNode(source: Record<string, unknown>, seq = 1, time = 1000): Con
     time,
     content: [{ type: 'text', text: 'block' }],
     source,
-    provenance: { role: 'inject', label: 'file-mount' },
+    // DSH 0.2.0 renamed the old `provenance` field to `producer` and added the
+    // target-declared `form`. Neither is read by the fold.
+    producer: { role: 'inject', label: 'file-mount' },
     form: null,
   }
 }

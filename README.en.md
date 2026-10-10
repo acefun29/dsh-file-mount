@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.1.5--rc.1-4c6ef5.svg" alt="DSH 0.1.5-rc.1 or later">
+  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.2.0--rc.2-4c6ef5.svg" alt="DSH 0.2.0-rc.2 or later">
   <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg" alt="Node ^22.19 or >=24">
 </p>
 
@@ -39,7 +39,7 @@ npx --yes @deepseek-ai/dsh plugin --profile web add https://github.com/acefun29/
 npx --yes @deepseek-ai/dsh --profile web
 ```
 
-With a global `dsh`, replace the first line with `dsh plugin --profile web add <the same URL>`. This is a prebuilt tarball: no npm, no `allowBuilds`.
+With a global `dsh`, replace the first line with `dsh plugin --profile web add <the same URL>`. This is a prebuilt tarball: no npm, no `allowBuilds`. **DSH desktop** uses the `desktop` profile instead: swap `--profile web` for `--profile desktop`. After editing the source, reinstall the copy a profile already has with `pnpm dsh:install` (set `DSH_PROFILE=desktop` first; the installer defaults to `web`).
 
 If `npx @deepseek-ai/dsh` prints nothing for a long time, it is fetching the CLI (the first run downloads the whole dependency tree) — just wait it out.
 
@@ -124,13 +124,14 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 
 | Plugin | DSH |
 | --- | --- |
+| `0.8.0` | `0.2.0-rc.2` (desktop line; `peerDependencies` declare `^0.2.0-rc.2`; type check, unit tests, build and an artifact-level client smoke all verified, with the built artifact compared by SHA-256 inside the desktop profile) |
 | `0.7.0` | `0.1.5-rc.1` or later, including the session format v4 of `0.1.7` (verified on `0.1.7-rc.2`) |
 | `0.5.1`–`0.6.0` | `0.1.5-rc.1` or later (verified on `0.1.5-rc.2`) |
 | `≤0.5.0` | DSH from the `0.1.0-rc.5` line; no longer valid once `Session.events` was removed (0.1.2-alpha.4) |
 
 The plugin connects to contracts on both sides: the host's `tools/post-execute` interception point and the read/write/edit canonical values, plus the browser's slots (`conversation.view`) and session snapshot layout.
 
-**Run the tests after every DSH upgrade.** Coupling points — the compaction checkpoint shape, the tool-result shape, the client snapshot layout — are pinned by tests (`pnpm test`), so a shape change fails loudly. Semantic changes that keep the same names (the kind that left a blank dashboard until it was actually exercised in a browser) are only caught by running it for real.
+**Run the tests after every DSH upgrade.** Coupling points — the compaction checkpoint shape, the tool-result shape, the client snapshot layout — are pinned by tests (`pnpm test`), so a shape change fails loudly. Semantic changes that keep the same names (the kind that left a blank dashboard until it was actually exercised in a browser) are only caught by running it for real. The client half also has an **artifact-level smoke** (`pnpm run smoke:client`): it loads the **built** `lib/client.js` through DSH's frozen module table and exercises slot registration, a real React render and the focus-request ack, so any out-of-table `require` fails immediately.
 
 ## Known limitations
 

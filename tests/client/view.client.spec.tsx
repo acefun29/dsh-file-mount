@@ -6,29 +6,48 @@
  */
 import { render } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { MountedFilesView } from '../../src/client/MountedFilesView.tsx'
-import type { FileMountKey } from '../src/client/locales.ts'
+import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { MountedFilesView, VIEW_ID } from '../../src/client/MountedFilesView.tsx'
+import type { MountedFilesViewProps } from '../../src/client/MountedFilesView.tsx'
+import type { FileMountKey } from '../../src/client/locales.ts'
 import { zh } from '../../src/client/locales.ts'
 
 /**
- * Minimal stand-in for the DSH 0.1.5 slot runtime share: `useSession` carries
+ * Minimal stand-in for the DSH slot runtime share: `useSession` carries
  * session state only, and the conversation nodes hang off the registered Chat
  * target snapshot behind `useConversation`.
+ *
+ * Every other member of the standard prop kit (0.2.0's extra session hooks and
+ * the `conversation.view` owner callbacks) is an inert double; the single cast
+ * at the end keeps this double independent of later additions to that kit.
  */
-function viewProps(nodes: readonly ConversationNode[]) {
+function viewProps(
+  nodes: readonly ConversationNode[],
+  viewRequest: { view: string; focus: string } | null = null,
+  completeViewRequest: () => void = () => undefined,
+): MountedFilesViewProps {
   const t = (key: FileMountKey): string => zh[key]
   return {
     useSession: (selector: (snapshot: { sessionId: string }) => unknown) => selector({ sessionId: 's1' }),
+    useSessions: () => undefined,
     useConversation: (selector: (snapshot: unknown) => unknown) =>
       selector({
         views: { get: (target: string) => (target === 'chat' ? { legacy: { nodes } } : undefined) },
         activeTargets: new Set(['chat']),
       }),
-    useSessions: () => undefined,
-    sessionId: 's1' as never,
+    useProjection: () => undefined,
+    useInput: () => undefined,
+    inputActions: {},
+    sessionId: 's1',
+    // DSH 0.2.0 owner props of a 'conversation.view' entry (inspectCall,
+    // viewRequest, openView, completeViewRequest); this view only consumes the
+    // focus request.
+    inspectCall: undefined,
+    viewRequest,
+    openView: () => undefined,
+    completeViewRequest,
     t,
-  }
+  } as unknown as MountedFilesViewProps
 }
 
 describe('MountedFilesView', () => {
@@ -57,7 +76,7 @@ describe('MountedFilesView', () => {
           mountKind: 'new',
           savedTokens: 0,
         },
-        provenance: { role: 'inject', label: 'file-mount' },
+        producer: { role: 'inject', label: 'file-mount' },
         form: 'notice',
       },
     ]
@@ -104,7 +123,7 @@ describe('MountedFilesView', () => {
           mountKind: 'new',
           savedTokens: 0,
         },
-        provenance: { role: 'inject', label: 'file-mount' },
+        producer: { role: 'inject', label: 'file-mount' },
         form: 'notice',
       },
     ]
@@ -141,7 +160,7 @@ describe('MountedFilesView', () => {
           savedTokens: 0,
           spentTokens: 22,
         },
-        provenance: { role: 'inject', label: 'file-mount' },
+        producer: { role: 'inject', label: 'file-mount' },
         form: 'notice',
       },
     ]
@@ -175,7 +194,7 @@ describe('MountedFilesView', () => {
           mountKind: 'new',
           savedTokens: 0,
         },
-        provenance: { role: 'inject', label: 'file-mount' },
+        producer: { role: 'inject', label: 'file-mount' },
         form: null,
       },
     ]
@@ -189,14 +208,41 @@ describe('MountedFilesView', () => {
           activeTargets: new Set(['chat']),
         }),
       useSessions: () => undefined,
-      sessionId: 's1' as never,
+      useProjection: () => undefined,
+      useInput: () => undefined,
+      inputActions: {},
+      sessionId: 's1',
+      inspectCall: undefined,
+      viewRequest: null,
+      openView: () => undefined,
+      completeViewRequest: () => undefined,
       t: (key: FileMountKey): string => zh[key],
-    }
+    } as unknown as MountedFilesViewProps
     const { container, rerender } = render(<MountedFilesView {...props} />)
     expect(container.querySelector('[data-mount-empty]')).not.toBeNull()
     nodes.mockReturnValue(b)
     rerender(<MountedFilesView {...props} />)
     expect(container.querySelectorAll('[data-mount-row]')).toHaveLength(1)
     expect(container.querySelector('[data-mount-empty]')).toBeNull()
+  })
+
+  // DSH 0.2.0: the shell stores a one-shot focus request until the ADDRESSED
+  // view acknowledges it, so an unacknowledging registrant would leave the
+  // request pending for the rest of the session.
+  it('acknowledges a focus request addressed to this view', () => {
+    const completeViewRequest = vi.fn()
+    const { container } = render(
+      <MountedFilesView {...viewProps([], { view: VIEW_ID, focus: 'src/a.ts' }, completeViewRequest)} />,
+    )
+    expect(container.querySelector('[data-mount-empty]')).not.toBeNull()
+    expect(completeViewRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a focus request addressed to another view unanswered', () => {
+    const completeViewRequest = vi.fn()
+    render(
+      <MountedFilesView {...viewProps([], { view: 'token-viewer', focus: 'x' }, completeViewRequest)} />,
+    )
+    expect(completeViewRequest).not.toHaveBeenCalled()
   })
 })

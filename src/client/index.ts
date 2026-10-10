@@ -12,7 +12,13 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: the `ctx.slots` Context merge, declared by the UI renderer.
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { MountedFilesView } from './MountedFilesView.tsx'
+// Type-only: DSH 0.2.0 splits the session seat family across packages. The
+// `useSession`/`sessionId` members of SessionStandardProps are declared by
+// ui-session, so that module must be in the program for ConvViewProps (and
+// therefore MountedFilesView's props) to type. The conversation UI already
+// requires ui-session, so this adds a declaration edge, not a bundling one.
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import { MountedFilesView, VIEW_ID } from './MountedFilesView.tsx'
 import { en, NS, zh } from './locales.ts'
 
 /** Required services: the slot registry and the locale service. */
@@ -33,7 +39,7 @@ export function apply(ctx: Context): void {
   const t = ctx.locale.bind(NS)
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
-    id: 'file-mount',
+    id: VIEW_ID,
     order: 20,
     locale: NS,
     label: () => t('view.fileMount'),

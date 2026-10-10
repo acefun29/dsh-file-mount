@@ -19,7 +19,7 @@
  * each segment's `born` position then maps to a display level (fresh/ok/warn/
  * expired/unknown) via pressure × depth against the host-stamped threshold.
  */
-import type { ConversationNode } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { LedgerSegment } from '../types.ts'
 import {
   applyMountState,

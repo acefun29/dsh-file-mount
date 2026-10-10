@@ -26,7 +26,9 @@ describe('one-click install contract', () => {
       'cordis.patch.yml',
       'scripts/install-cli.mjs',
     ]))
-    expect(pkg.bin?.['dsh-file-mount']).toBe('./scripts/install-cli.mjs')
+    // No leading './': npm canonicalizes bin values this way ("npm pkg fix"), and
+    // publishing with './' makes npm warn that it auto-corrected the field.
+    expect(pkg.bin?.['dsh-file-mount']).toBe('scripts/install-cli.mjs')
     expect(pkg.repository?.url).toContain('dsh-file-mount')
   })
 

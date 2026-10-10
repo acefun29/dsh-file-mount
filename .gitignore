@@ -7,6 +7,10 @@ lib/
 .env
 *.tgz
 
+# 本地适配调研 / 验证残留（可整目录删除；.recon/probe-0.2.0/tc 是可复现的 0.2.0 验证树）
+.recon/
+.npm-cache/
+
 # 整个项目目录的文档（指南 / 方案草稿 / 规则等）一律不提交，只留 readme
 *.md
 !/README.md

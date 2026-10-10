@@ -1,0 +1,10 @@
+# pnpm 11 把「依赖构建脚本」白名单放在这里（由 `pnpm install` 自动生成占位内容后整理）。
+# koffi 是 DSH 侧的原生依赖，其构建脚本对本插件的类型检查 / 测试 / 构建都不是必需的；
+# 显式声明为 false，避免 install 因 ERR_PNPM_IGNORED_BUILDS 以非 0 退出。
+allowBuilds:
+  koffi: false
+
+# 无 TTY 的自动化 shell（agent / CI 包装脚本）里，pnpm 11 执行 `pnpm run <script>`
+# 前会调用 `pnpm install` 做依赖状态检查，并按「无 TTY 不能清除 node_modules」中止。
+# 关掉该检查，让 `pnpm typecheck` / `pnpm test` / `pnpm run build` 可直接跑。
+verifyDepsBeforeRun: false

@@ -55,24 +55,24 @@ describe('diffLines', () => {
 describe('remapSegments', () => {
   it('shifts a fully-surviving segment', () => {
     // old lines 4,5,6 -> new lines 1,2,3
-    const segs = remapSegments([{ start: 4, end: 6 }], [undefined, undefined, undefined, 1, 2, 3])
-    expect(segs).toEqual([{ start: 1, end: 3 }])
+    const segs = remapSegments([{ start: 4, end: 6, expired: 0 }], [undefined, undefined, undefined, 1, 2, 3])
+    expect(segs).toEqual([{ start: 1, end: 3, expired: 0 }])
   })
 
   it('splits around an inserted line', () => {
     // old 1,2,3 -> new: 1->1, 2->3, 3->4 (new line 2 inserted)
-    const segs = remapSegments([{ start: 1, end: 3 }], [1, 3, 4])
-    expect(segs).toEqual([{ start: 1, end: 1 }, { start: 3, end: 4 }])
+    const segs = remapSegments([{ start: 1, end: 3, expired: 0 }], [1, 3, 4])
+    expect(segs).toEqual([{ start: 1, end: 1, expired: 0 }, { start: 3, end: 4, expired: 0 }])
   })
 
   it('returns empty when nothing survives', () => {
-    const segs = remapSegments([{ start: 1, end: 3 }], [undefined, undefined, undefined])
+    const segs = remapSegments([{ start: 1, end: 3, expired: 0 }], [undefined, undefined, undefined])
     expect(segs).toEqual([])
   })
 
   it('merges adjacent surviving runs across segments', () => {
-    const segs = remapSegments([{ start: 1, end: 2 }, { start: 4, end: 5 }], [1, 2, undefined, 3, 4])
-    expect(segs).toEqual([{ start: 1, end: 4 }])
+    const segs = remapSegments([{ start: 1, end: 2, expired: 0 }, { start: 4, end: 5, expired: 0 }], [1, 2, undefined, 3, 4])
+    expect(segs).toEqual([{ start: 1, end: 4, expired: 0 }])
   })
 
   it('scales tokens onto surviving lines by line count', () => {

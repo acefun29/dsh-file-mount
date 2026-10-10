@@ -1,7 +1,7 @@
 /** Mounted-files dashboard: coverage map, search, sort, net savings + a rough
  * CNY figure (plan items 16 + 17), matching the DSH tab styling. */
 
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import {
@@ -14,6 +14,12 @@ import { formatRange } from '../render.ts'
 import css from './MountedFilesView.module.css'
 
 export type MountedFilesViewProps = ConvViewProps & PropsLocale<'file-mount'>
+
+/**
+ * Registration id of this view, shared by the slot registration and the
+ * focus-request filter so the two can never drift apart.
+ */
+export const VIEW_ID = 'file-mount'
 
 /** Rough conversion for the savings figure: yuan per one million tokens. */
 const CNY_PER_MILLION_TOKENS = 1
@@ -80,7 +86,7 @@ function levelKey(level: keyof typeof LEVEL_KEYS) {
  * @param props - slot standard kit (useSession) plus the view locale seat.
  * @returns the mounted-files dashboard, or the localized empty hint.
  */
-export function MountedFilesView({ useConversation, useSession, t }: MountedFilesViewProps) {
+export function MountedFilesView({ useConversation, useSession, viewRequest, completeViewRequest, t }: MountedFilesViewProps) {
   const sessionId = useSession((snapshot) => snapshot.sessionId)
   // DSH 0.1.5 split the old single snapshot: `useSession` now carries SESSION
   // state only (queue/lifecycle/errors), and the assembled conversation nodes
@@ -99,6 +105,15 @@ export function MountedFilesView({ useConversation, useSession, t }: MountedFile
   const rootRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const foldedThreshold = mounts[0]?.freshnessThreshold ?? 0.6
+  // DSH 0.2.0 added a one-shot focus request to the `conversation.view` owner
+  // props. The shell keeps it in the session store until the addressed View
+  // acknowledges, so a registrant that ignores it leaves the request pending
+  // for the rest of the session. This view exposes no focusable sub-target, so
+  // it acknowledges a request addressed to itself and clears nothing else.
+  // Optional chaining keeps the component renderable on 0.1.x shells too.
+  useEffect(() => {
+    if (viewRequest?.view === VIEW_ID) completeViewRequest?.()
+  }, [viewRequest, completeViewRequest])
 
   useLayoutEffect(() => {
     const pin = () => scrollPanelToTop(rootRef.current, listRef.current)

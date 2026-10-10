@@ -172,10 +172,10 @@ describe('FileContentCache', () => {
   it('merges concurrent reads into one readFile call', async () => {
     let reads = 0
     const cache = new FileContentCache({
-      readFile: async (path) => {
+      readFile: (async (path: string) => {
         reads++
         return await readFile(path)
-      },
+      }) as unknown as typeof readFile,
     })
     const [r1, r2] = await Promise.all([cache.lookup(a), cache.lookup(a)])
     expect(reads).toBe(1)
@@ -223,10 +223,10 @@ describe('FileContentCache', () => {
   it('markStale forces a re-read even when stat still matches', async () => {
     let reads = 0
     const cache = new FileContentCache({
-      readFile: async (path) => {
+      readFile: (async (path: string) => {
         reads++
         return readFile(path)
-      },
+      }) as unknown as typeof readFile,
     })
     await cache.get(a)
     expect(reads).toBe(1)
@@ -240,11 +240,11 @@ describe('FileContentCache', () => {
     const gate = new Promise<void>((resolve) => { release = resolve })
     let reads = 0
     const cache = new FileContentCache({
-      readFile: async (path) => {
+      readFile: (async (path: string) => {
         reads++
         if (reads === 1) await gate
         return readFile(path)
-      },
+      }) as unknown as typeof readFile,
     })
     const inflight = cache.lookup(a)
     await vi.waitFor(() => { expect(reads).toBe(1) })

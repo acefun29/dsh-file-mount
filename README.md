@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.1.5--rc.1-4c6ef5.svg" alt="DSH 0.1.5-rc.1 or later">
+  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.2.0--rc.2-4c6ef5.svg" alt="DSH 0.2.0-rc.2 or later">
   <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg" alt="Node ^22.19 or >=24">
 </p>
 
@@ -40,6 +40,8 @@ npx --yes @deepseek-ai/dsh --profile web
 ```
 
 已有全局 `dsh` 时，第一行换成 `dsh plugin --profile web add <同一个地址>`。装的是预构建包：不走 npm，也不需要 `allowBuilds`。
+
+**DSH 桌面版**用的是 `desktop` profile，把命令里的 `--profile web` 换成 `--profile desktop` 即可。改完源码要让已装进 profile 的那份生效，用 `pnpm dsh:install` 重装——安装器默认只装 `web` profile，PowerShell 里先设 `$env:DSH_PROFILE = 'desktop'` 再跑即切到桌面 profile。
 
 若 `npx @deepseek-ai/dsh` 长时间没输出，多半在拉 CLI（首次要下整棵依赖树），等它结束即可。
 
@@ -124,13 +126,14 @@ npx --yes @deepseek-ai/dsh plugin --profile web add "file:$Tgz"
 
 | 插件版本 | DSH |
 | --- | --- |
+| `0.8.0` | `0.2.0-rc.2`（桌面版线；`peerDependencies` 声明 `^0.2.0-rc.2`，类型检查 / 单测 / 构建与产物级客户端冒烟均已核验，并把构建产物装进桌面 profile 比对哈希） |
 | `0.7.0` | `0.1.5-rc.1` 及以上，包括 `0.1.7` 的会话格式 v4（在 `0.1.7-rc.2` 上实测） |
 | `0.5.1`–`0.6.0` | `0.1.5-rc.1` 及以上（在 `0.1.5-rc.2` 上实测） |
 | `≤0.5.0` | `0.1.0-rc.5` 时代的 DSH；`Session.events` 被移除（0.1.2-alpha.4）之后不再适用 |
 
 插件同时对接两侧契约：宿主侧的 `tools/post-execute` 拦截面与 read/write/edit 的 canonical value；浏览器侧的插槽（`conversation.view`）与会话快照布局。
 
-**升级 DSH 后先跑一遍测试**。压缩 checkpoint 形状、工具结果形状、客户端快照布局这几处耦合点都由测试钉死（`pnpm test`），DSH 改形状时会立刻报警——真机上「页面空白」这类只改语义不改名字的变更，更是只有实跑才能发现。
+**升级 DSH 后先跑一遍测试**。压缩 checkpoint 形状、工具结果形状、客户端快照布局这几处耦合点都由测试钉死（`pnpm test`），DSH 改形状时会立刻报警——真机上「页面空白」这类只改语义不改名字的变更，更是只有实跑才能发现。客户端半另有一条**产物级冒烟**（`pnpm run smoke:client`）：用 DSH 冻结的模块表加载**构建后的** `lib/client.js`，走一遍注册槽 + 真实 React 渲染 + 焦点请求 ack，任何越表 `require` 都会立即报错。
 
 ## 已知限制
 

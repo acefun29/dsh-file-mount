@@ -18,7 +18,6 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { normalizeAbsPath } from '../src/paths.ts'
 import { harness, MockAdapter, textResponse, toolCallResponse, toolResultText, waitForIdle } from './harness.ts'
 import { isFileMountSource } from '../src/mount-source.ts'
 
@@ -136,7 +135,7 @@ describe('file-mount adversarial', () => {
             after: { type: 'string', required: true },
           },
         },
-        render: (_args, value) => [{ type: 'text', text: 'edited' }],
+        render: (_args, _value) => [{ type: 'text', text: 'edited' }],
       },
       async execute(args) {
         const before = await (await import('node:fs/promises')).readFile(args.file_path, 'utf8')
@@ -205,7 +204,7 @@ describe('file-mount adversarial', () => {
     // The injected notice is head-only; the changed body rides the tool result.
     const remount = agent.session.snapshotEvents().find((e) => e.type === 'user/message'
       && typeof e.data.source === 'object' && e.data.source !== null
-      && e.data.source['mountKind'] === 'remount')
+      && (e.data.source as unknown as Record<string, unknown>)['mountKind'] === 'remount')
     const remountText = remount !== undefined && remount.type === 'user/message'
       && remount.data.content[0] !== undefined && remount.data.content[0].type === 'text'
       ? remount.data.content[0].text

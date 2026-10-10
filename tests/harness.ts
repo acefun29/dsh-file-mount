@@ -14,7 +14,7 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
-import FsLocal from '@deepseek-ai/dsh-fs-local'
+import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import * as toolFs from '@deepseek-ai/dsh-tool-fs'
 import { apply as fileMountApply, type Config } from '../src/index.ts'
 
@@ -29,11 +29,16 @@ export interface HarnessOptions {
 
 /** Scripted adapter: each model call consumes the next script entry. */
 export class MockAdapter extends LlmAdapter {
+  private readonly script: (StreamChunk[] | ((options: GenerateOptions) => StreamChunk[]))[]
+  private readonly reasoning: LlmModelReasoningInfo | undefined
+
   constructor(
-    private readonly script: (StreamChunk[] | ((options: GenerateOptions) => StreamChunk[]))[],
-    private readonly reasoning?: LlmModelReasoningInfo,
+    script: (StreamChunk[] | ((options: GenerateOptions) => StreamChunk[]))[],
+    reasoning?: LlmModelReasoningInfo,
   ) {
     super()
+    this.script = script
+    this.reasoning = reasoning
   }
 
   override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
@@ -96,7 +101,7 @@ export async function harness(adapter: MockAdapter, options: HarnessOptions): Pr
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
-  await ctx.plugin(FsLocal, { cwd: options.cwd })
+  await ctx.plugin(LocalFileSystem, { cwd: options.cwd })
   await ctx.plugin(toolFs, {})
   await ctx.plugin(fileMountApply, { enabled: options.enabled ?? true, ...options.config })
   ctx.llm.registerAdapter(['mock'], adapter)
