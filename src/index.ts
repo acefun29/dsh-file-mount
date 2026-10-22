@@ -124,12 +124,12 @@ export const Config: z<Config> = z.object({
 export const name = 'file-mount'
 
 /**
- * The DSH release this build is verified against (0.2.0-rc.2 desktop line).
+ * The DSH release this build is verified against (0.2.1-rc.2 line).
  * Keep in sync with `engines.dsh` / the `@deepseek-ai/dsh*` peer ranges in
  * package.json (asserted by tests/incompat.spec.ts); the version is quoted in
  * the incompatible-shape notice so a drift report carries the tested baseline.
  */
-export const DSH_COMPAT_VERSION = '0.2.0-rc.2'
+export const DSH_COMPAT_VERSION = '0.2.1-rc.2'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {

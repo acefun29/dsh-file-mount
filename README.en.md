@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.2.0--rc.2-4c6ef5.svg" alt="DSH 0.2.0-rc.2 or later">
+  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.2.1--rc.2-4c6ef5.svg" alt="DSH 0.2.1-rc.2 or later">
   <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg" alt="Node ^22.19 or >=24">
 </p>
 
@@ -124,6 +124,7 @@ The plugin sits on the `tools/post-execute` interception point, dispatched by to
 
 | Plugin | DSH |
 | --- | --- |
+| `0.9.0` | `0.2.1-rc.2` (npm `latest` line; compatibility is keyed on `engines.dsh` from 0.2.1 on, peers bumped in step; the platform module table measured two new seeds — `zod` and `@tanstack/react-virtual`; type check, the 242 tests, build, artifact-level client smoke, a real `dsh` profile install and the `evaluatePluginCompatibility` verdict all verified) |
 | `0.8.1` | `0.2.0-rc.2` (desktop line; slims the ledger source members to mitigate format-bump rejection, and adds a once-per-session notice when a read/write/edit result shape drifts) |
 | `0.8.0` | `0.2.0-rc.2` (desktop line; `peerDependencies` declare `^0.2.0-rc.2`; type check, unit tests, build and an artifact-level client smoke all verified, with the built artifact compared by SHA-256 inside the desktop profile) |
 | `0.7.0` | `0.1.5-rc.1` or later, including the session format v4 of `0.1.7` (verified on `0.1.7-rc.2`) |

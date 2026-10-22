@@ -15,6 +15,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
+import WorkingDirectory from '@deepseek-ai/dsh-working-directory'
 import * as toolFs from '@deepseek-ai/dsh-tool-fs'
 import { apply as fileMountApply, type Config } from '../src/index.ts'
 
@@ -106,6 +107,9 @@ export async function harness(adapter: MockAdapter, options: HarnessOptions): Pr
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(LocalFileSystem, { cwd: options.cwd })
+  // DSH 0.2.1's tool-fs injects the workingDirectory service (the agent cwd
+  // the read/write/edit tools resolve paths against) — boot it before toolFs.
+  await ctx.plugin(WorkingDirectory, {})
   await ctx.plugin(toolFs, {})
   // Tests that must see or alter what the plugin's own post-execute handler
   // observes (shape drift) register their listener BEFORE the plugin, so it

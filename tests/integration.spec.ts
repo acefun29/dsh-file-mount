@@ -12,7 +12,10 @@ import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId, createUserMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import SessionStore from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { apply as JsonlSessionPersistence } from '@deepseek-ai/dsh-session-persistence-jsonl'
+// 0.2.1: the Context.sessionPersistence augmentation ships in the contract
+// package's types and is no longer pulled in transitively by the jsonl backend.
+import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { MountStore } from '../src/store.ts'
 import { hashBuffer } from '../src/hash.ts'

@@ -17,14 +17,19 @@ import { transform } from 'lightningcss'
 
 const PACKAGE_ID = 'dsh-file-mount'
 
-/** The module specifiers the web shell shares into the frozen module table. */
+/**
+ * The module specifiers the web shell shares into the frozen module table
+ * (measured from `dsh-client-web@0.2.1-rc.2` `getStaticModules()`; 0.2.1 adds
+ * `zod` and `@tanstack/react-virtual`, and 0.2.0 already dropped the
+ * `dsh-client-web-react` / `ui-attachment` / `schema-form` 0.1.x names).
+ */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',
+  'zod', '@tanstack/react-virtual',
+  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-web-react',
   '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-schema-form',
+  '@deepseek-ai/dsh-client-ui-dockkit',
 ] as const
 
 const CSS_VIRTUAL_PREFIX = '\0dsh-css:'

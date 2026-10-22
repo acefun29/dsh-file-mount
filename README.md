@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.2.0--rc.2-4c6ef5.svg" alt="DSH 0.2.0-rc.2 or later">
+  <img src="https://img.shields.io/badge/DSH-%E2%89%A50.2.1--rc.2-4c6ef5.svg" alt="DSH 0.2.1-rc.2 or later">
   <img src="https://img.shields.io/badge/node-%5E22.19%20%7C%7C%20%3E%3D24-brightgreen.svg" alt="Node ^22.19 or >=24">
 </p>
 
@@ -126,6 +126,7 @@ npx --yes @deepseek-ai/dsh plugin --profile web add "file:$Tgz"
 
 | 插件版本 | DSH |
 | --- | --- |
+| `0.9.0` | `0.2.1-rc.2`（npm `latest` 线；兼容判定自 0.2.1 起以 `engines.dsh` 为主，peers 同步提升；平台模块表实测新增 `zod` 与 `@tanstack/react-virtual`；类型检查 / 242 项测试 / 构建 / 产物级客户端冒烟 / `dsh` profile 实装与 `evaluatePluginCompatibility` 判定均已核验） |
 | `0.8.1` | `0.2.0-rc.2`（桌面版线；账本 source 成员瘦身以缓解格式升级拒载风险，并给 read/write/edit 的形状漂移加每会话一次告警） |
 | `0.8.0` | `0.2.0-rc.2`（桌面版线；`peerDependencies` 声明 `^0.2.0-rc.2`，类型检查 / 单测 / 构建与产物级客户端冒烟均已核验，并把构建产物装进桌面 profile 比对哈希） |
 | `0.7.0` | `0.1.5-rc.1` 及以上，包括 `0.1.7` 的会话格式 v4（在 `0.1.7-rc.2` 上实测） |
