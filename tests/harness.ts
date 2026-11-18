@@ -10,6 +10,7 @@ import { ToolCallId, LlmAdapter, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -104,6 +105,12 @@ export async function harness(adapter: MockAdapter, options: HarnessOptions): Pr
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(ToolRuntime)
+  // DSH 0.2.2 moved tool execution behind a selected ToolExecutor: without an
+  // executor in the composition the loop fails the turn with
+  // TOOL_EXECUTOR_UNAVAILABLE before any tool (and so any post-execute
+  // listener) runs. Load the native executor, the same wiring as the harness
+  // repo's own agent-loop tests (packages/core/agent-loop/tests/tool-executors.spec.ts).
+  await ctx.plugin(NativeToolExecutor)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(AgentLoop, { agents: [] })
   await ctx.plugin(LocalFileSystem, { cwd: options.cwd })

@@ -19,9 +19,10 @@ const PACKAGE_ID = 'dsh-file-mount'
 
 /**
  * The module specifiers the web shell shares into the frozen module table
- * (measured from `dsh-client-web@0.2.1-rc.2` `getStaticModules()`; 0.2.1 adds
- * `zod` and `@tanstack/react-virtual`, and 0.2.0 already dropped the
- * `dsh-client-web-react` / `ui-attachment` / `schema-form` 0.1.x names).
+ * (measured from `dsh-client-web@0.2.2-rc.4` `getStaticModules()`, identical
+ * to the 0.2.1 table: 0.2.1 added `zod` and `@tanstack/react-virtual`, and
+ * 0.2.0 already dropped the `dsh-client-web-react` / `ui-attachment` /
+ * `schema-form` 0.1.x names).
  */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime', 'react-dom', 'react-dom/client', '@deepseek-ai/cordis',

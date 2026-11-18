@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { isAbsolute, basename, dirname, join, relative, resolve } from 'node:path'
 
 /** Cached case-insensitivity probe result (null = not probed yet). */
 let caseInsensitive: boolean | null = null
@@ -56,16 +56,46 @@ function foldPath(p: string): string {
  * when the file is inside the workspace. Files outside `cwd` (or when `cwd`
  * is missing) stay absolute, also posix-ified. Ledger identity stays on
  * {@link normalizeAbsPath}.
+ *
+ * Inside/outside is decided on realpath identity, not raw spelling: the read
+ * tool reports realpath'd paths while a caller may pass a symlinked cwd
+ * (macOS `/var` vs `/private/var`), and a raw prefix comparison would then
+ * misfile workspace files as outside. A missing path falls back to its
+ * physical spelling; relative tails are identical under both spellings.
  */
 export function displayPath(filePath: string, cwd: string | undefined): string {
   if (cwd === undefined || cwd.length === 0) return toPosix(filePath)
   const abs = resolve(cwd, filePath)
-  const base = resolve(cwd)
-  const rel = relative(foldPath(base), foldPath(abs))
+  const base = realOrRaw(resolve(cwd))
+  const physical = realOrRaw(abs)
+  const rel = relative(foldPath(base), foldPath(physical))
   if (rel === '') return '.'
   const relPosix = toPosix(rel)
-  if (isAbsolute(rel) || relPosix === '..' || relPosix.startsWith('../')) return toPosix(abs)
-  const prefixLen = base.length + (abs.length > base.length ? 1 : 0)
-  if (prefixLen > abs.length) return toPosix(abs)
-  return toPosix(abs.slice(prefixLen))
+  if (isAbsolute(relPosix) || relPosix === '..' || relPosix.startsWith('../')) return toPosix(abs)
+  return toPosix(physical.slice(base.length + 1))
+}
+
+/** Symlink-resolved spelling of a path. For a missing target, resolve the
+ * nearest existing ancestor and re-append the missing suffix, so both sides
+ * of the comparison share one physical spelling before and after creation
+ * (same approach as fs-local's resolveLocalTarget). */
+function realOrRaw(p: string): string {
+  try {
+    return realpathSync(p)
+  } catch {
+    /* fall through to ancestor walk */
+  }
+  const missing: string[] = []
+  let ancestor = p
+  while (true) {
+    const parent = dirname(ancestor)
+    if (parent === ancestor) return p
+    missing.unshift(basename(ancestor))
+    ancestor = parent
+    try {
+      return join(realpathSync(ancestor), ...missing)
+    } catch {
+      /* keep walking up */
+    }
+  }
 }

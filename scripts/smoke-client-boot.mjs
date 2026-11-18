@@ -2,7 +2,7 @@
  * Artifact-level boot smoke for the client half.
  *
  * Loads the **built** `lib/client.js` exactly the way the DSH web shell does:
- * the frozen 0.2.1-rc.2 platform module table is the only `require` surface, the
+ * the frozen 0.2.2-rc.4 platform module table is the only `require` surface, the
  * bundle registers itself through `window.__ModuleLoader__.load({ id, factory })`,
  * and the resulting plugin is driven through a minimal cordis-ish client context.
  * Then the registered `conversation.view` component is mounted into real
@@ -18,9 +18,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
- * The frozen platform module table of the 0.2.1-rc.2 web shell
- * (`dsh-client-web` `getStaticModules()` / `PLATFORM_MODULES`): 0.2.1 adds
- * `zod` and `@tanstack/react-virtual` to the 0.2.0 seed list.
+ * The frozen platform module table of the 0.2.2-rc.4 web shell
+ * (`dsh-client-web` `getStaticModules()` / `PLATFORM_MODULES`): unchanged from
+ * 0.2.1, which added `zod` and `@tanstack/react-virtual` to the 0.2.0 seed list.
  */
 const SEED_WORDS = [
   'react',
